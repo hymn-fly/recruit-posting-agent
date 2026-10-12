@@ -99,3 +99,37 @@ COMMENT ON COLUMN scrape_runs.detail     IS '실패/확인불가 사유 등 상�
 COMMENT ON COLUMN scrape_runs.run_at     IS '실행 시각';
 
 CREATE INDEX IF NOT EXISTS idx_scrape_runs_company ON scrape_runs(company_id);
+-- ---------------------------------------------------------------
+-- filtered_postings: LLM 필터가 걸러낸(= job_postings에 저장하지 않은) 공고
+-- 필터가 얼마나 잘 거르는지(놓친 AI 공고/잘못 거른 공고) 사람이 검수하기 위한 테이블
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS filtered_postings (
+    id              SERIAL PRIMARY KEY,
+    company_id      INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    title           TEXT NOT NULL,
+    url             TEXT,
+    location        TEXT,
+    stage           TEXT NOT NULL,
+    reason          TEXT,
+    is_actually_ai  BOOLEAN,
+    first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_filtered_postings_stage CHECK (stage IN ('list', 'detail')),
+    -- url이 NULL인 공고도 같은 (회사, 제목)이면 중복으로 본다
+    CONSTRAINT uq_filtered_postings UNIQUE NULLS NOT DISTINCT (company_id, title, url)
+);
+
+COMMENT ON TABLE  filtered_postings IS 'AI Engineer 관련이 아니라고 LLM이 걸러낸 공고. 필터 품질 검수용';
+COMMENT ON COLUMN filtered_postings.id             IS '고유 번호 (자동 증가)';
+COMMENT ON COLUMN filtered_postings.company_id     IS '공고를 올린 회사 (companies.id 참조)';
+COMMENT ON COLUMN filtered_postings.title          IS '공고 제목';
+COMMENT ON COLUMN filtered_postings.url            IS '공고 상세 링크. 없으면 NULL';
+COMMENT ON COLUMN filtered_postings.location       IS '근무지 (목록에 있을 때만)';
+COMMENT ON COLUMN filtered_postings.stage          IS '어느 단계에서 걸러졌는지: list(목록 제목·직군만 보고 제외) | detail(JD 본문을 읽고 제외)';
+COMMENT ON COLUMN filtered_postings.reason         IS 'LLM이 제외한 이유 (한 줄)';
+COMMENT ON COLUMN filtered_postings.is_actually_ai IS '사람이 검수한 정답. NULL=미검수, true=실제로는 AI 공고(필터가 놓침), false=제외가 맞음';
+COMMENT ON COLUMN filtered_postings.first_seen_at  IS '처음 걸러진 시각';
+COMMENT ON COLUMN filtered_postings.last_seen_at   IS '가장 최근에 다시 걸러진 시각';
+
+CREATE INDEX IF NOT EXISTS idx_filtered_postings_company ON filtered_postings(company_id);
+CREATE INDEX IF NOT EXISTS idx_filtered_postings_stage   ON filtered_postings(stage);

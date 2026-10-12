@@ -126,6 +126,47 @@ async def touch_postings(company_name: str, urls: list[str]) -> dict:
 
 
 @mcp.tool()
+async def record_filtered_postings(company_name: str, items: list[dict]) -> dict:
+    """AI 관련이 아니라서 걸러낸 공고들을 한 번에 기록한다 (필터 품질 검수용).
+
+    items의 각 원소: {"title": str, "stage": "list"|"detail", "reason": str(제외 이유 한 줄),
+                      "url": str(선택), "location": str(선택)}
+    stage: list=목록의 제목·직군만 보고 제외, detail=JD 본문을 읽고 제외.
+    이미 기록된 공고는 stage/reason/last_seen_at만 갱신하며, 사람이 매긴 is_actually_ai는 유지한다.
+    """
+    rows = []
+    for it in items:
+        title, stage = it.get("title"), it.get("stage")
+        if not title or stage not in ("list", "detail"):
+            raise ValueError(f"title과 stage(list|detail)는 필수: {it!r}")
+        rows.append((title, it.get("url"), it.get("location"), stage, it.get("reason")))
+    p = await pool()
+    async with p.acquire() as conn:
+        cid = await _company_id(conn, company_name)
+        async with conn.transaction():
+            await conn.executemany(
+                """INSERT INTO filtered_postings (company_id, title, url, location, stage, reason)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   ON CONFLICT (company_id, title, url) DO UPDATE
+                     SET stage = EXCLUDED.stage, reason = EXCLUDED.reason,
+                         location = COALESCE(EXCLUDED.location, filtered_postings.location),
+                         last_seen_at = now()""",
+                [(cid, *r) for r in rows])
+    return {"recorded": len(rows)}
+
+
+@mcp.tool()
+async def list_filtered_urls(company_name: str) -> list[str]:
+    """이미 걸러낸 공고의 URL 목록. 같은 공고의 JD를 매번 다시 읽지 않기 위해 쓴다."""
+    p = await pool()
+    async with p.acquire() as conn:
+        cid = await _company_id(conn, company_name)
+        rows = await conn.fetch(
+            "SELECT url FROM filtered_postings WHERE company_id = $1 AND url IS NOT NULL", cid)
+    return [r["url"] for r in rows]
+
+
+@mcp.tool()
 async def record_scrape_run(company_name: str, status: str, detail: Optional[str] = None) -> dict:
     """회사별 스크래핑 결과 기록. status: 'ok' | 'failed' | 'unverifiable'."""
     if status not in ("ok", "failed", "unverifiable"):

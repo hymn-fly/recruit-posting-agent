@@ -109,6 +109,18 @@
 - **미검증**: Claude Desktop에 실제 등록했을 때 예약 작업이 로컬 MCP 서버를 쓸 수 있는지, 그리고 예약 작업의 웹 접근/JS 렌더링 능력. 처음엔 `list_companies`만 호출하는 작은 작업으로 확인 필요.
 - **참고**: 기존 LangGraph 적재 코드(`agents/ingest_graph.py` 등)는 그대로 둔다(API 방식 대안). 현대자동차/BCG의 URL은 여전히 `...`로 잘려 있다.
 
+### #14 걸러낸 공고 기록 테이블(`filtered_postings`) + MCP 도구
+- **왜**: LLM 필터가 얼마나 잘 거르는지(AI 공고를 놓치거나 잘못 거르는지) 확인하려면, 걸러진 공고와 그 이유가 남아 있어야 한다.
+- **변경**
+  - `db/schema.sql` + **Neon DB 적용 완료**: `filtered_postings` 테이블 신규(회사, 제목, URL, 근무지, `stage`=list|detail, `reason`, `is_actually_ai`(사람 검수용, NULL=미검수), 최초/최근 시각). UNIQUE (company_id, title, url)를 `NULLS NOT DISTINCT`로 걸어 URL이 없는 공고도 중복되지 않는다. 모든 컬럼에 COMMENT.
+  - `mcp_server/server.py`
+    - `record_filtered_postings(company_name, items)` 신규 — 여러 건을 한 번에 기록(목록 단계 제외가 회사당 수십 건이라 토큰 절약을 위해 배치 전용). 재기록 시 `stage/reason/last_seen_at`만 갱신하고 사람이 단 `is_actually_ai`는 보존.
+    - `list_filtered_urls(company_name)` 신규 — 이미 걸러낸 URL을 매번 다시 읽지 않기 위함.
+  - `prompts/daily_ingest.md`: 제외한 공고를 `record_filtered_postings`로 기록하는 단계(목록 단계/JD 단계)와 `list_filtered_urls` 사용 규칙 추가.
+- **검증**: MCP 도구 9개 로딩, 같은 공고를 세 번 기록해도 행이 늘지 않음(URL 없는 행 포함), `detail`로 stage 갱신, 사람이 단 `is_actually_ai=true` 유지, 잘못된 stage 거부. 테스트 행은 삭제(현재 0행).
+- **미적용**: 기존 LangGraph 적재 경로(`agents/ingest_graph.py`)는 이 테이블에 기록하지 않는다. 목록 단계에서 LLM이 제외 공고를 아예 출력하지 않는 구조라 별도 수정이 필요하다.
+- **검수 방법 예시**: `select stage, count(*), count(*) filter (where is_actually_ai) as missed from filtered_postings where is_actually_ai is not null group by stage;`
+
 ---
 
 ## 미해결 / 다음 후보
