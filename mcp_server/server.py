@@ -12,6 +12,9 @@ load_dotenv()
 
 _pool: Optional[asyncpg.Pool] = None
 
+# AI Engineer 관련으로 적재하는 직군 (agents/state.py의 AiCategory와 동일)
+ALLOWED_CATEGORIES = ("AI Engineer", "ML Engineer", "LLM Engineer", "MLOps", "Data")
+
 
 async def pool() -> asyncpg.Pool:
     global _pool
@@ -73,6 +76,8 @@ async def upsert_job_posting(company_name: str, title: str, url: Optional[str] =
                              deadline: Optional[str] = None,
                              source_snapshot: Optional[str] = None) -> dict:
     """공고 1건을 저장한다. 이미 있으면 last_seen_at 등을 갱신한다. 날짜는 YYYY-MM-DD."""
+    if category is not None and category not in ALLOWED_CATEGORIES:
+        raise ValueError(f"category는 {ALLOWED_CATEGORIES} 중 하나여야 함: {category!r}")
     p = await pool()
     async with p.acquire() as conn:
         cid = await _company_id(conn, company_name)
@@ -93,6 +98,31 @@ async def upsert_job_posting(company_name: str, title: str, url: Optional[str] =
             responsibilities, required_qualifications, preferred_qualifications,
             _date(posted_at), _date(deadline), source_snapshot)
     return dict(row)
+
+
+@mcp.tool()
+async def list_known_urls(company_name: str) -> list[str]:
+    """해당 회사의 활성 공고 URL 목록. 이미 적재된 공고는 JD를 다시 읽지 않고 건너뛰기 위해 쓴다."""
+    p = await pool()
+    async with p.acquire() as conn:
+        cid = await _company_id(conn, company_name)
+        rows = await conn.fetch(
+            "SELECT url FROM job_postings WHERE company_id = $1 AND is_active AND url IS NOT NULL",
+            cid)
+    return [r["url"] for r in rows]
+
+
+@mcp.tool()
+async def touch_postings(company_name: str, urls: list[str]) -> dict:
+    """이번에도 목록에서 확인된 기존 공고의 last_seen_at을 갱신한다 (JD 재파싱 없이)."""
+    p = await pool()
+    async with p.acquire() as conn:
+        cid = await _company_id(conn, company_name)
+        res = await conn.execute(
+            """UPDATE job_postings SET last_seen_at = now(), is_active = true
+               WHERE company_id = $1 AND url = ANY($2::text[])""",
+            cid, urls)
+    return {"updated": int(res.split()[-1])}
 
 
 @mcp.tool()

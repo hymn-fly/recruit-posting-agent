@@ -96,6 +96,19 @@
   - 이번 실행에서는 Gemma가 한 번도 10초 안에 응답하지 못해 사실상 전부 OpenAI가 처리했다. 매 호출이 10초 대기를 먼저 소비한다.
   - 모델이 바뀌면서 분류가 달라졌다. `[Tech] RX 기술 리더(팀장)`(id 48, 하는 일 50자)이 새로 AI Engineer로 들어왔다. 이전 Gemma+Haiku 실행에서는 제외된 공고라 AI 관련성 점검이 필요하다.
 
+### #13 Claude Desktop 예약 작업용 적재 구조: MCP 도구 추가, 회사 시딩, 프롬프트
+- **왜**: 적재용 LLM(토큰 사용량이 큼)을 API 대신 Claude Desktop 예약 작업에서 Claude가 직접 수행하고, 로컬 MCP 서버(`job-db`)로 DB에 적재하는 방식으로 전환하기 위해.
+- **변경**
+  - `mcp_server/server.py`
+    - `list_known_urls(company_name)` 신규 — 활성 공고 URL 목록. 이미 저장된 공고는 JD 재파싱을 건너뛰기 위함(토큰 절약).
+    - `touch_postings(company_name, urls)` 신규 — 건너뛴 기존 공고의 `last_seen_at` 갱신.
+    - `upsert_job_posting`에 `category` 검증 추가(`AI Engineer`/`ML Engineer`/`LLM Engineer`/`MLOps`/`Data` 외 거부) — Claude가 직접 쓸 때 잘못된 분류가 DB에 들어가는 것을 막는다.
+  - `scripts/seed_companies.py` 신규 — `scrapers/companies.py`의 23개 회사를 DB에 시딩(LLM 호출 없음). **실행 완료: companies 23행.**
+  - `prompts/daily_ingest.md` 신규 — 예약 작업 프롬프트(회사별 `access_method` 처리, 신규 공고만 JD 파싱, `record_scrape_run` 기록 규칙)와 Claude Desktop MCP 등록 방법.
+- **검증**: MCP로 7개 tool 로딩, `list_companies` 23건, `list_known_urls`(현대오토에버 5건), `touch_postings`(1건 갱신), 잘못된 category 거부(DB에 미삽입) 확인.
+- **미검증**: Claude Desktop에 실제 등록했을 때 예약 작업이 로컬 MCP 서버를 쓸 수 있는지, 그리고 예약 작업의 웹 접근/JS 렌더링 능력. 처음엔 `list_companies`만 호출하는 작은 작업으로 확인 필요.
+- **참고**: 기존 LangGraph 적재 코드(`agents/ingest_graph.py` 등)는 그대로 둔다(API 방식 대안). 현대자동차/BCG의 URL은 여전히 `...`로 잘려 있다.
+
 ---
 
 ## 미해결 / 다음 후보
