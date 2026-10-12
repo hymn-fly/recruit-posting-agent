@@ -1,12 +1,12 @@
 """질의 에이전트: plan_search -> run_search -> synthesize_answer."""
 import json
 
-from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 
 from agents.state import QueryState, SearchParams
 
-MODEL = "claude-sonnet-5-5"
+MODEL = "gemma-4-31b-it"  # Gemini API 경유 Gemma 4 31B (GOOGLE_API_KEY 필요)
 
 
 def _parse(raw) -> list[dict]:
@@ -33,7 +33,7 @@ def _parse(raw) -> list[dict]:
 
 
 def make_graph(tools: dict):
-    llm = ChatAnthropic(model=MODEL)
+    llm = ChatGoogleGenerativeAI(model=MODEL)
     planner = llm.with_structured_output(SearchParams)
 
     async def plan_search(state: QueryState) -> QueryState:

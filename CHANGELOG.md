@@ -70,6 +70,16 @@
 - **변경**: `.env.example`에 들어 있던 실제 DB 비밀번호와 Neon 설정 안내문을 placeholder로 교체, `CLAUDE.md`에 커밋/푸시 규칙 추가, git 초기화 후 원격 `main`(README 1개 커밋) 위에 커밋.
 - **주의**: `.env.example`에 있던 비밀번호는 이 대화에서 노출됐으므로 Neon 콘솔에서 재발급(rotate)하고 `.env`를 갱신하는 것을 권장한다.
 
+### #11 LLM을 Claude에서 Gemini API 경유 Gemma 4 31B로 교체
+- **왜**: Claude 대신 Gemini API(Gemma 4 31B)를 쓰기로 결정.
+- **변경**
+  - `langchain-anthropic` 제거, `langchain-google-genai` 추가 (`pyproject.toml`, `uv.lock`)
+  - `agents/ingest_graph.py`, `agents/query_graph.py`: `ChatAnthropic` → `ChatGoogleGenerativeAI`, 모델 `gemma-4-31b-it`, 출력 상한 인자 `max_tokens` → `max_output_tokens`
+  - `.env.example`: `ANTHROPIC_API_KEY` → `GOOGLE_API_KEY` (`GEMINI_API_KEY`도 인식됨)
+- **근거**: 모델 ID `gemma-4-31b-it`는 Google 공식 문서(Gemma on Gemini API)에 명시. 함수 호출과 시스템 지시는 지원, 컨텍스트 256K.
+- **검증**: import 및 그래프 컴파일만 확인(더미 키, 네트워크 호출 없음). **실제 호출은 `GOOGLE_API_KEY`가 비어 있어 못 했다.**
+- **위험**: Gemma의 구조화 출력(`with_structured_output`) 지원 여부는 공식 문서에 API 수준 근거가 없다. 실행 시 파싱 오류가 나면 JSON 모드/프롬프트 기반 파싱으로 바꿔야 한다. 출력 상한과 rate limit도 문서에 명시가 없다.
+
 ---
 
 ## 미해결 / 다음 후보
