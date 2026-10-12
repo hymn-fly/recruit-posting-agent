@@ -80,10 +80,27 @@
 - **검증**: import 및 그래프 컴파일만 확인(더미 키, 네트워크 호출 없음). **실제 호출은 `GOOGLE_API_KEY`가 비어 있어 못 했다.**
 - **위험**: Gemma의 구조화 출력(`with_structured_output`) 지원 여부는 공식 문서에 API 수준 근거가 없다. 실행 시 파싱 오류가 나면 JSON 모드/프롬프트 기반 파싱으로 바꿔야 한다. 출력 상한과 rate limit도 문서에 명시가 없다.
 
+### #12 Gemma 실호출 검증 + Gemma/OpenAI 전환 인터페이스(10초 초과 시 gpt-6-luna)
+- **왜**: Gemma 4 31B 실호출 결과 매우 느렸다. 작은 호출도 30~110초, `thinking_level="minimal"`로 줄여도 약 29초였고, 구조화 출력 호출은 간헐적으로 `500 INTERNAL`이 났다(구조화 출력 자체는 동작함). 그래서 Gemma가 10초 안에 응답하지 못하면 OpenAI로 넘기도록 했다.
+- **변경**
+  - `agents/llm.py` 신규:
+    - `make_chat(model, max_output_tokens)` — 모델명 접두사로 제공자 선택(`gemma*`/`gemini*` → Google, `gpt*`/`o1`·`o3`·`o4` → OpenAI). 모델명만 바꿔 쓰는 단일 인터페이스.
+    - `LLM(max_output_tokens, schema)` — `ainvoke(prompt)` 하나로 사용. 기본 `gemma-4-31b-it`가 10초 초과하거나 에러가 나면 `gpt-6-luna`로 전환(전환 시 재시도 3회, 경고 로그 출력). 모델명/타임아웃은 `llm.py` 상단 상수.
+  - `agents/ingest_graph.py`, `agents/query_graph.py`: `LLM` 래퍼 사용. 질의 응답은 `msg.text` 사용(Gemma 응답 content가 블록 리스트라서).
+  - `pyproject.toml`, `uv.lock`: `langchain-openai` 추가. `.env.example`: `OPENAI_API_KEY` 추가.
+- **검증**
+  - 가짜 모델로 3경우(느림/에러/정상)와 미지원 모델명 에러 확인.
+  - `gpt-6-luna` 실호출 OK(일반 4.1초, 구조화 2.6초).
+  - 현대오토에버 실적재 OK: 호출 7번 모두 Gemma 10초 초과로 OpenAI 전환, 전체 약 73초. 기존 4건은 URL 중복 판정으로 갱신, 1건 추가(총 5건). 목록 후보 6건 중 JD 확인 후 5건.
+- **관찰**
+  - 이번 실행에서는 Gemma가 한 번도 10초 안에 응답하지 못해 사실상 전부 OpenAI가 처리했다. 매 호출이 10초 대기를 먼저 소비한다.
+  - 모델이 바뀌면서 분류가 달라졌다. `[Tech] RX 기술 리더(팀장)`(id 48, 하는 일 50자)이 새로 AI Engineer로 들어왔다. 이전 Gemma+Haiku 실행에서는 제외된 공고라 AI 관련성 점검이 필요하다.
+
 ---
 
 ## 미해결 / 다음 후보
-- 1차 필터의 재현율 점검(현대오토에버 목록에서 빠진 AI 공고가 없는지)
+- Gemma가 계속 10초를 넘기면 매 호출 10초 낭비 → 일정 시간 Gemma 건너뛰기(서킷 브레이커) 또는 기본 모델 교체 검토
+- id 48 `RX 기술 리더(팀장)`의 AI 관련성 점검 및 1차 필터의 재현율 점검(현대오토에버 목록에서 빠진 AI 공고가 없는지)
 - URL 없는 공고의 중복 방지(`UNIQUE ... NULLS NOT DISTINCT` 또는 별도 키)
 - `js_rendered` 회사 처리(브라우저 자동화 또는 잡포털 미러)
 - 현대자동차/BCG의 잘린 URL(`...`) 보완

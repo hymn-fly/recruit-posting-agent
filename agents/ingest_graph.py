@@ -7,12 +7,11 @@ from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 
+from agents.llm import LLM
 from agents.state import ExtractionResult, IngestState, JDDetail
 
-MODEL = "gemma-4-31b-it"  # Gemini API 경유 Gemma 4 31B (GOOGLE_API_KEY 필요)
 MAX_CHARS = 60_000          # 목록 페이지 텍스트 상한
 MAX_DETAIL_CHARS = 20_000   # 공고 상세(JD) 텍스트 상한
 DETAIL_CONCURRENCY = 4
@@ -33,8 +32,8 @@ def page_to_text(html: str, base_url: str) -> str:
 
 
 def make_graph(tools: dict):
-    list_llm = ChatGoogleGenerativeAI(model=MODEL, max_output_tokens=16_000).with_structured_output(ExtractionResult)
-    detail_llm = ChatGoogleGenerativeAI(model=MODEL, max_output_tokens=4_000).with_structured_output(JDDetail)
+    list_llm = LLM(16_000, schema=ExtractionResult)
+    detail_llm = LLM(4_000, schema=JDDetail)
 
     async def fetch_page(state: IngestState) -> IngestState:
         c = state["company"]

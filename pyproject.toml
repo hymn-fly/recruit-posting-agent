@@ -12,6 +12,7 @@ dependencies = [
     "httpx",
     "beautifulsoup4",
     "langchain-google-genai>=4.4.1",
+    "langchain-openai>=1.7.0",
 ]
 
 [tool.uv]

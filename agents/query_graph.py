@@ -1,12 +1,10 @@
 """질의 에이전트: plan_search -> run_search -> synthesize_answer."""
 import json
 
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 
+from agents.llm import LLM
 from agents.state import QueryState, SearchParams
-
-MODEL = "gemma-4-31b-it"  # Gemini API 경유 Gemma 4 31B (GOOGLE_API_KEY 필요)
 
 
 def _parse(raw) -> list[dict]:
@@ -33,8 +31,8 @@ def _parse(raw) -> list[dict]:
 
 
 def make_graph(tools: dict):
-    llm = ChatGoogleGenerativeAI(model=MODEL)
-    planner = llm.with_structured_output(SearchParams)
+    llm = LLM()
+    planner = LLM(schema=SearchParams)
 
     async def plan_search(state: QueryState) -> QueryState:
         params = await planner.ainvoke(
@@ -59,7 +57,7 @@ def make_graph(tools: dict):
             f"사용자 프로필: {state.get('profile') or '(제공되지 않음)'}\n"
             f"질문: {state['question']}\n\n"
             f"검색 결과(JSON):\n{json.dumps(state['results'], ensure_ascii=False, default=str)}")
-        return {"answer": msg.content if isinstance(msg.content, str) else str(msg.content)}
+        return {"answer": msg.text}  # content는 thinking/text 블록 리스트일 수 있어 text만 사용
 
     g = StateGraph(QueryState)
     g.add_node("plan_search", plan_search)
