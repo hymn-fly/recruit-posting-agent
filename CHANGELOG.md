@@ -121,10 +121,26 @@
 - **미적용**: 기존 LangGraph 적재 경로(`agents/ingest_graph.py`)는 이 테이블에 기록하지 않는다. 목록 단계에서 LLM이 제외 공고를 아예 출력하지 않는 구조라 별도 수정이 필요하다.
 - **검수 방법 예시**: `select stage, count(*), count(*) filter (where is_actually_ai) as missed from filtered_postings where is_actually_ai is not null group by stage;`
 
+## 2026-10-21
+
+### #15 채용공고 조회 Agent RAG화 (Multi-Agent P0+P1) + LLM 서킷 브레이커
+- **왜**: Multi-Agent(채용공고 조회 / 기업분석 / 내 프로필) 구성의 첫 단계. 키워드(ILIKE) 검색은 "LLM 에이전트 서비스 경험"처럼 서술형 요청을 공고의 하는 일·자격요건과 의미로 맞추지 못한다. 또 Gemma가 매번 타임아웃이라 호출마다 10~30초를 버리고 있었다.
+- **변경**
+  - `db/schema.sql` + **Neon 적용 완료**: `job_postings.embedding vector(768)`, `embedding_hash`(원문 sha256, 바뀌면 재임베딩), HNSW cosine 인덱스.
+  - `mcp_server/embeddings.py` 신규: `gemini-embedding-001`(768차원, 문서/질의 task_type 구분). pgvector에는 텍스트(`'[..]'::vector`)로 넘겨 numpy 의존을 없앴다.
+  - `mcp_server/server.py`: `embed_pending_postings`, `semantic_search_jobs`(임베딩 유사도 + 회사/직군/지역/최대 경력 필터, `similarity` 반환), `get_job_posting(id)` 신규. 어디서 실행해도 프로젝트 `.env`를 읽도록 경로를 고정했다.
+  - `scripts/embed_postings.py` 신규: 기존 행 백필.
+  - `agents/job_search_graph.py` 신규: `plan`(검색문 재작성 + 명시된 필터만) → `retrieve`(top-20) → `rerank_explain`(LLM이 최대 5건 선택·근거 작성, 결과에 없는 id는 버림. 답변 본문은 DB 값으로 코드가 조립). `agents/state.py`에 `JobSearchPlan`/`Ranking`/`JobSearchState` 추가.
+  - `agents/llm.py`: 서킷 브레이커. 기본 모델이 실패하면 `PRIMARY_COOLDOWN`(300초) 동안 건너뛰고 바로 폴백한다(적재 그래프에도 적용됨).
+  - `prompts/daily_ingest.md`: 마지막에 `embed_pending_postings` 호출 단계 추가.
+  - `pyproject.toml`: `langchain-tavily`, `pypdf`, `python-docx` 추가(P2/P3용). `.env.example`: `TAVILY_API_KEY`.
+- **검증**: 활성 공고 77건 임베딩, 재실행 시 0건(멱등). MCP 도구 12개 로딩. 질의 2개 — "LLM 에이전트 + RAG 파이프라인" → SK AI Agent 계열 4건 + CJ 1건(유사도 0.73~0.78), "MLOps 3년차 모델 서빙" → LG AI연구원 MLOps Engineer. 응답 시간은 서킷 브레이커 적용 전 55초에서 적용 후 12~26초.
+- **미검증**: Claude Desktop 예약 작업에서 `embed_pending_postings` 호출(실행 환경에 `GOOGLE_API_KEY` 필요. `.env`에서 읽는다).
+
 ---
 
 ## 미해결 / 다음 후보
-- Gemma가 계속 10초를 넘기면 매 호출 10초 낭비 → 일정 시간 Gemma 건너뛰기(서킷 브레이커) 또는 기본 모델 교체 검토
+- Gemma가 거의 항상 타임아웃 → 서킷 브레이커로 낭비는 줄였지만(#15), 기본 모델 교체 검토는 여전히 필요
 - id 48 `RX 기술 리더(팀장)`의 AI 관련성 점검 및 1차 필터의 재현율 점검(현대오토에버 목록에서 빠진 AI 공고가 없는지)
 - URL 없는 공고의 중복 방지(`UNIQUE ... NULLS NOT DISTINCT` 또는 별도 키)
 - `js_rendered` 회사 처리(브라우저 자동화 또는 잡포털 미러)

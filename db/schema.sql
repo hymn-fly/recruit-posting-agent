@@ -75,6 +75,14 @@ COMMENT ON COLUMN job_postings.is_active                IS '현재 열려 있는
 COMMENT ON COLUMN job_postings.first_seen_at            IS '이 공고를 처음 발견한 시각 (신규 공고 판별 기준)';
 COMMENT ON COLUMN job_postings.last_seen_at             IS '가장 최근 스크래핑에서 확인된 시각';
 
+-- RAG 검색용 임베딩 (gemini-embedding-001, 768차원). embed_pending_postings가 채운다
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding      vector(768);
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding_hash TEXT;
+COMMENT ON COLUMN job_postings.embedding      IS '제목·직군·하는 일·필수/우대 역량을 합친 텍스트의 임베딩 (gemini-embedding-001, 768차원). RAG 검색용';
+COMMENT ON COLUMN job_postings.embedding_hash IS '임베딩한 원문 텍스트의 sha256. 본문이 바뀌어 값이 달라지면 재임베딩 대상';
+
+CREATE INDEX IF NOT EXISTS idx_job_postings_embedding
+    ON job_postings USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_job_postings_category ON job_postings(category);
 CREATE INDEX IF NOT EXISTS idx_job_postings_active   ON job_postings(is_active);
 CREATE INDEX IF NOT EXISTS idx_job_postings_company  ON job_postings(company_id);

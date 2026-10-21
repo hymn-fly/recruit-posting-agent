@@ -57,3 +57,32 @@ class QueryState(TypedDict, total=False):
     params: SearchParams
     results: list[dict]
     answer: str
+
+
+# ---------------------------------------------------------------
+# 채용공고 조회 Agent (RAG)
+# ---------------------------------------------------------------
+class JobSearchPlan(BaseModel):
+    query: str = Field(description="임베딩 검색문. 원하는 역할·하는 일·보유/요구 역량을 서술한 1~3문장")
+    category: Optional[str] = Field(None, description="명시된 경우만: AI Engineer / ML Engineer / LLM Engineer / MLOps / Data")
+    company_name: Optional[str] = None
+    location: Optional[str] = None
+    max_years: Optional[int] = Field(None, description="사용자 경력 연차가 명시된 경우만 그 숫자")
+
+
+class Pick(BaseModel):
+    id: int = Field(description="검색 결과의 공고 id")
+    reason: str = Field(description="하는 일·자격요건 근거로 왜 맞는지 1~2문장")
+
+
+class Ranking(BaseModel):
+    picks: list[Pick] = Field(description="가장 잘 맞는 순서. 최대 5건, 맞는 게 없으면 빈 리스트")
+
+
+class JobSearchState(TypedDict, total=False):
+    question: str
+    profile: str             # 프로필 요약(있으면 검색문·추천에 반영)
+    plan: JobSearchPlan
+    results: list[dict]
+    candidates: list[dict]   # 추천 순서대로 공고 + reason
+    answer: str

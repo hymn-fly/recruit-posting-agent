@@ -5,6 +5,7 @@
 """
 import asyncio
 import logging
+import time
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -16,6 +17,9 @@ PRIMARY_MODEL = "gemma-4-31b-it"   # GOOGLE_API_KEY 필요
 FALLBACK_MODEL = "gpt-6-luna"      # OPENAI_API_KEY 필요
 PRIMARY_TIMEOUT = 10               # 초. 이 시간 안에 응답이 없으면 FALLBACK_MODEL로 전환
 FALLBACK_RETRIES = 3
+PRIMARY_COOLDOWN = 300             # 초. 기본 모델이 실패하면 이 시간 동안 건너뛰고 바로 폴백(서킷 브레이커)
+
+_primary_down_until: dict[str, float] = {}   # 모델명 -> 다시 시도할 시각 (프로세스 내 모든 LLM 인스턴스 공유)
 
 
 def make_chat(model: str, max_output_tokens: int | None = None) -> BaseChatModel:
@@ -44,11 +48,14 @@ class LLM:
             self._fallback = self._fallback.with_structured_output(schema)
 
     async def ainvoke(self, prompt: str):
-        try:
-            return await asyncio.wait_for(self._primary.ainvoke(prompt), self.primary_timeout)
-        except Exception as e:  # 타임아웃(10초 초과) 포함, 기본 모델 실패 시 전환
-            reason = f"{self.primary_timeout}초 초과" if isinstance(e, TimeoutError) else repr(e)[:120]
-            log.warning("%s 실패(%s) -> %s로 전환", self.primary_name, reason, self.fallback_name)
+        if time.monotonic() >= _primary_down_until.get(self.primary_name, 0):
+            try:
+                return await asyncio.wait_for(self._primary.ainvoke(prompt), self.primary_timeout)
+            except Exception as e:  # 타임아웃(10초 초과) 포함, 기본 모델 실패 시 전환
+                reason = f"{self.primary_timeout}초 초과" if isinstance(e, TimeoutError) else repr(e)[:120]
+                log.warning("%s 실패(%s) -> %s로 전환, %d초간 건너뜀",
+                            self.primary_name, reason, self.fallback_name, PRIMARY_COOLDOWN)
+                _primary_down_until[self.primary_name] = time.monotonic() + PRIMARY_COOLDOWN
         for i in range(FALLBACK_RETRIES):
             try:
                 return await self._fallback.ainvoke(prompt)

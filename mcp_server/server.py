@@ -1,14 +1,19 @@
 """커스텀 MCP 서버: 정해진 tool만 노출하며 임의 SQL은 실행하지 않는다."""
 import os
+import sys
 from contextlib import asynccontextmanager
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 import asyncpg
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
-load_dotenv()
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+from mcp_server.embeddings import embed_documents, embed_query, text_hash, to_pg  # noqa: E402
 
 _pool: Optional[asyncpg.Pool] = None
 
@@ -214,6 +219,100 @@ async def search_jobs(keyword: Optional[str] = None, company_name: Optional[str]
     rows = await p.fetch(sql, *args)
     return [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in dict(r).items()}
             for r in rows]
+
+
+def _row(r) -> dict:
+    return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in dict(r).items()}
+
+
+def _posting_text(r) -> str:
+    """임베딩 원문: 역할·자격요건 중심으로 합친다."""
+    parts = [r["title"], r["category"], r["responsibilities"],
+             r["required_qualifications"], r["preferred_qualifications"]]
+    return "\n".join(p for p in parts if p)
+
+
+async def embed_pending(limit: int = 100) -> dict:
+    """embedding이 없거나 원문이 바뀐 활성 공고를 배치 임베딩한다."""
+    limit = max(1, min(int(limit), 500))
+    p = await pool()
+    rows = await p.fetch(
+        """SELECT id, title, category, responsibilities, required_qualifications,
+                  preferred_qualifications, embedding_hash
+           FROM job_postings WHERE is_active ORDER BY id""")
+    todo = []
+    for r in rows:
+        text = _posting_text(r)
+        h = text_hash(text)
+        if h != r["embedding_hash"]:
+            todo.append((r["id"], text, h))
+    remaining = max(0, len(todo) - limit)
+    todo = todo[:limit]
+    vecs = await embed_documents([t for _, t, _ in todo])
+    async with p.acquire() as conn, conn.transaction():
+        await conn.executemany(
+            "UPDATE job_postings SET embedding = $2::vector, embedding_hash = $3 WHERE id = $1",
+            [(pid, to_pg(v), h) for (pid, _, h), v in zip(todo, vecs)])
+    return {"embedded": len(todo), "remaining": remaining}
+
+
+@mcp.tool()
+async def embed_pending_postings(limit: int = 100) -> dict:
+    """임베딩이 없거나 본문이 바뀐 공고를 임베딩한다. 적재가 끝난 뒤 한 번 호출한다."""
+    return await embed_pending(limit)
+
+
+@mcp.tool()
+async def semantic_search_jobs(query: str, category: Optional[str] = None,
+                               company_name: Optional[str] = None,
+                               location: Optional[str] = None,
+                               max_years: Optional[int] = None,
+                               only_active: bool = True, limit: int = 20) -> list[dict]:
+    """역할·자격요건 의미 기반(임베딩) 공고 검색. query는 원하는 역할/경험을 서술한 문장.
+
+    max_years: 요구 최소 경력이 이 값 이하인 공고(또는 명시 없음)만. similarity는 0~1(클수록 유사).
+    """
+    conds, args = ["j.embedding IS NOT NULL"], [to_pg(await embed_query(query))]
+
+    def add(sql: str, value):
+        args.append(value)
+        conds.append(sql.format(n=len(args)))
+
+    if company_name:
+        add("c.name ILIKE ${n}", f"%{company_name}%")
+    if category:
+        add("j.category ILIKE ${n}", f"%{category}%")
+    if location:
+        add("j.location ILIKE ${n}", f"%{location}%")
+    if max_years is not None:
+        add("(j.min_years IS NULL OR j.min_years <= ${n})", int(max_years))
+    if only_active:
+        conds.append("j.is_active")
+    limit = max(1, min(int(limit), 100))
+    sql = f"""SELECT j.id, c.name AS company, c.industry, j.title, j.url, j.location,
+                     j.employment_type, j.min_years, j.category, j.responsibilities,
+                     j.required_qualifications, j.preferred_qualifications, j.deadline,
+                     1 - (j.embedding <=> $1::vector) AS similarity
+              FROM job_postings j JOIN companies c ON c.id = j.company_id
+              WHERE {" AND ".join(conds)}
+              ORDER BY j.embedding <=> $1::vector LIMIT {limit}"""
+    p = await pool()
+    return [_row(r) for r in await p.fetch(sql, *args)]
+
+
+@mcp.tool()
+async def get_job_posting(id: int) -> dict:
+    """공고 1건 전체(하는 일/필수/우대 역량)와 회사·산업 정보."""
+    p = await pool()
+    r = await p.fetchrow(
+        """SELECT j.id, c.name AS company, c.industry, j.title, j.url, j.location,
+                  j.employment_type, j.min_years, j.category, j.responsibilities,
+                  j.required_qualifications, j.preferred_qualifications, j.posted_at,
+                  j.deadline, j.is_active
+           FROM job_postings j JOIN companies c ON c.id = j.company_id WHERE j.id = $1""", id)
+    if r is None:
+        raise ValueError(f"공고 없음: id={id}")
+    return _row(r)
 
 
 @mcp.tool()
