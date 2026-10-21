@@ -47,7 +47,14 @@ class IngestState(TypedDict, total=False):
 
 
 class SearchParams(BaseModel):
-    keyword: Optional[str] = None
+    title_keywords: Optional[list[str]] = Field(
+        None, description="직무명 키워드(제목 부분일치, 하나라도 맞으면 통과). 직무명을 물었을 때만. 예: ['백엔드', 'Backend']")
+    q_responsibilities: Optional[str] = Field(
+        None, description="'하는 일'에 대한 질문일 때, 하는 일 본문과 비교할 서술문")
+    q_required: Optional[str] = Field(
+        None, description="필수 자격요건(기술·경력)에 대한 질문일 때, 필수 역량 본문과 비교할 서술문")
+    q_preferred: Optional[str] = Field(
+        None, description="우대 사항에 대한 질문일 때, 우대 역량 본문과 비교할 서술문")
     company_name: Optional[str] = None
     category: Optional[str] = None
     location: Optional[str] = None

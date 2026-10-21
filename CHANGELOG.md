@@ -191,6 +191,15 @@
 - **검증**: 활성 77건 — 통합 77, 하는 일 66/66, 필수 66/66, 우대 63/63(원문이 있는 컬럼 수와 일치). 재실행 시 0건(멱등). "Kubernetes 운영·모델 서빙 최적화" 질의에서 기본 가중치는 MLOps Engineer(id 97)가 1위, 필수 역량만(`w_required=1`) 보면 필수 유사도 0.791인 LLM Inference Engineer(id 92)가 1위로 바뀐다. MCP 경유 채용공고 조회 Agent 질의 2개 정상(33초, 13초).
 - **참고**: 채용공고 조회 Agent는 아직 기본 가중치만 쓴다. 질문에 따라 가중치를 바꾸게 하려면 `JobSearchPlan`에 가중치 필드를 추가하면 된다.
 
+### #21 질의 에이전트(`query_graph`) 검색을 키워드 일괄 매칭 → 제목 키워드 + 필드별 임베딩 cosine으로 전환
+- **왜**: `query_graph`가 질문에서 키워드 1개만 뽑아 제목·하는 일·필수·우대 4개 컬럼에 `ILIKE`로 걸었다. 의미가 같은 표현("LLM 서비스 개발" vs "RAG 파이프라인 구축")을 못 찾고, 직무명 질문과 역량 질문이 구분되지 않았다.
+- **변경**
+  - `mcp_server/server.py` `search_jobs`: `keyword` 제거 → `title_keywords`(제목 `ILIKE ANY`, 하나라도 일치)와 `q_responsibilities`/`q_required`/`q_preferred`(각각 하는 일/필수/우대 컬럼 임베딩과 cosine 유사도) 추가. 질의가 주어진 컬럼 유사도의 평균(NULL 컬럼 제외)을 `similarity`로 정렬하고 `sim_*`도 반환, 질의 컬럼이 모두 비어 있는 공고는 제외. 질의가 없으면 기존처럼 최근 확인 순. 결과에 `id` 추가.
+  - `agents/state.py` `SearchParams`: 위 필드로 교체.
+  - `agents/query_graph.py` `plan_search`: 직무명이면 `title_keywords`, 하는 일/필수/우대 질문이면 해당 `q_*` 필드를 채우도록 프롬프트 변경.
+- **검증**: 실제 Neon·Gemini로 `search_jobs` 직접 호출(제목만 / 하는 일 / 필수+우대+제목 / 조건 없음)과 MCP 경유 `query_graph` 3개 질의 — "백엔드 개발자" → `title_keywords=[백엔드, Backend]`, "RAG 파이프라인을 구축하는 일" → `q_responsibilities`(유사도 0.77), "PyTorch 3년+ / 쿠버네티스 우대" → `q_required`+`q_preferred`(0.74).
+- **참고**: Supervisor의 조회 Agent(`job_search_graph`)는 이미 `semantic_search_jobs`를 쓰므로 변경 없음. 제목 키워드와 임베딩 질의는 AND로 결합된다.
+
 ---
 
 ## 미해결 / 다음 후보

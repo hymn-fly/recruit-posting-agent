@@ -1,4 +1,5 @@
 """커스텀 MCP 서버: 정해진 tool만 노출하며 임의 SQL은 실행하지 않는다."""
+import asyncio
 import json
 import os
 import sys
@@ -186,21 +187,38 @@ async def record_scrape_run(company_name: str, status: str, detail: Optional[str
     return {"id": rid}
 
 
+# search_jobs의 필드별 의미 검색: (인자 이름, 비교할 임베딩 컬럼)
+FIELD_QUERIES = (("q_responsibilities", "embedding_responsibilities"),
+                 ("q_required", "embedding_required"),
+                 ("q_preferred", "embedding_preferred"))
+
+
 @mcp.tool()
-async def search_jobs(keyword: Optional[str] = None, company_name: Optional[str] = None,
+async def search_jobs(title_keywords: Optional[list[str]] = None,
+                      q_responsibilities: Optional[str] = None,
+                      q_required: Optional[str] = None,
+                      q_preferred: Optional[str] = None,
+                      company_name: Optional[str] = None,
                       category: Optional[str] = None, location: Optional[str] = None,
                       only_active: bool = True, limit: int = 20) -> list[dict]:
-    """조건에 맞는 공고를 검색한다 (파라미터 바인딩된 SQL만 실행)."""
+    """공고 검색. 직무명은 제목 키워드 매칭, 하는 일/자격요건은 필드별 임베딩 cosine 유사도로 비교한다.
+
+    title_keywords: 직무명 키워드(예: ["백엔드", "Backend"]). 제목에 하나라도 부분일치하는 공고만 (ILIKE).
+    q_responsibilities / q_required / q_preferred: 각각 하는 일 / 필수 역량 / 우대 역량과 비교할 서술문.
+      주어진 질의마다 해당 컬럼 임베딩과 cosine 유사도(0~1)를 구하고, 그 평균을 similarity로 정렬한다.
+      질의가 주어진 컬럼이 모두 비어 있는 공고는 제외한다. 질의가 없으면 최근 확인 순으로 정렬한다.
+    sim_*에 컬럼별 유사도도 돌려준다. 파라미터 바인딩된 SQL만 실행한다.
+    """
     conds, args = [], []
 
     def add(sql: str, value):
         args.append(value)
         conds.append(sql.format(n=len(args)))
 
-    if keyword:
-        add("(j.title ILIKE ${n} OR j.responsibilities ILIKE ${n} "
-            "OR j.required_qualifications ILIKE ${n} OR j.preferred_qualifications ILIKE ${n})",
-            f"%{keyword}%")
+    titles = [t for t in (title_keywords or []) if t and t.strip()]
+    if titles:
+        args.append([f"%{t.strip()}%" for t in titles])
+        conds.append(f"j.title ILIKE ANY(${len(args)}::text[])")
     if company_name:
         add("c.name ILIKE ${n}", f"%{company_name}%")
     if category:
@@ -209,17 +227,40 @@ async def search_jobs(keyword: Optional[str] = None, company_name: Optional[str]
         add("j.location ILIKE ${n}", f"%{location}%")
     if only_active:
         conds.append("j.is_active")
+
+    queries = {"q_responsibilities": q_responsibilities, "q_required": q_required,
+               "q_preferred": q_preferred}
+    asked = [(name, col) for name, col in FIELD_QUERIES if (queries[name] or "").strip()]
+    vecs = await asyncio.gather(*(embed_query(queries[name]) for name, _ in asked))
+    sim_cols, sim_names = [], []
+    for (name, col), vec in zip(asked, vecs):
+        args.append(to_pg(vec))
+        sim_name = "sim_" + col.removeprefix("embedding_")
+        sim_cols.append(f"1 - (j.{col} <=> ${len(args)}::vector) AS {sim_name}")
+        sim_names.append(sim_name)
+
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
     limit = max(1, min(int(limit), 100))
-    sql = f"""SELECT c.name AS company, c.industry, j.title, j.url, j.location, j.employment_type,
-                     j.min_years, j.category, j.responsibilities, j.required_qualifications,
-                     j.preferred_qualifications, j.posted_at, j.deadline
-              FROM job_postings j JOIN companies c ON c.id = j.company_id
-              {where} ORDER BY j.last_seen_at DESC LIMIT {limit}"""
+    base_cols = """j.id, c.name AS company, c.industry, j.title, j.url, j.location, j.employment_type,
+                   j.min_years, j.category, j.responsibilities, j.required_qualifications,
+                   j.preferred_qualifications, j.posted_at, j.deadline, j.last_seen_at"""
+    if sim_names:
+        # 질의가 주어진 컬럼 유사도의 평균. NULL 컬럼은 빼고 평균낸다
+        num = " + ".join(f"COALESCE({n}, 0)" for n in sim_names)
+        den = " + ".join(f"({n} IS NOT NULL)::int" for n in sim_names)
+        sql = f"""SELECT * FROM (
+                    SELECT *, ({num}) / NULLIF({den}, 0) AS similarity FROM (
+                      SELECT {base_cols}, {", ".join(sim_cols)}
+                      FROM job_postings j JOIN companies c ON c.id = j.company_id {where}) s
+                  ) t WHERE similarity IS NOT NULL
+                  ORDER BY similarity DESC LIMIT {limit}"""
+    else:
+        sql = f"""SELECT {base_cols} FROM job_postings j JOIN companies c ON c.id = j.company_id
+                  {where} ORDER BY j.last_seen_at DESC LIMIT {limit}"""
     p = await pool()
     rows = await p.fetch(sql, *args)
-    return [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in dict(r).items()}
-            for r in rows]
+    return [{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dict(r).items()
+             if k != "last_seen_at"} for r in rows]
 
 
 def _row(r) -> dict:
