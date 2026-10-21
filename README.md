@@ -194,4 +194,6 @@ uv run python agents/main_chat.py
 ```
 - 명령: `/select N`(추천 N번 선택), `/id ID`(공고 id로 선택), `/reset`, `/quit`
 - 필요 키: `GOOGLE_API_KEY`(LLM·임베딩), `OPENAI_API_KEY`(폴백), `TAVILY_API_KEY`(기업분석), `NEON_DATABASE_URL`
+- 공고 검색 점수: 하는 일 / 필수 / 우대 역량을 **컬럼별 벡터**로 비교해 `0.5 / 0.35 / 0.15` 가중합한다(값이 없는 컬럼은 빼고 정규화).
+  `semantic_search_jobs(w_responsibilities=, w_required=, w_preferred=)`로 가중치를 바꿀 수 있고, 결과에 `sim_*` 컬럼별 유사도가 포함된다.
 - 새로 적재된 공고는 `embed_pending_postings`(예약 작업 마지막 단계) 또는 `uv run python scripts/embed_postings.py`로 임베딩해야 검색된다.

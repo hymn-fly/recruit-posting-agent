@@ -233,6 +233,23 @@ def _posting_text(r) -> str:
     return "\n".join(p for p in parts if p)
 
 
+# 임베딩 방식이 바뀌면 올린다 (hash가 달라져 전체 재임베딩됨)
+EMBED_VERSION = "v3-fields-raw"
+FIELD_COLUMNS = ("responsibilities", "required_qualifications", "preferred_qualifications")
+# 컬럼별 검색 기본 가중치 (하는 일 / 필수 / 우대)
+DEFAULT_WEIGHTS = (0.5, 0.35, 0.15)
+CANDIDATE_POOL = 200   # 통합 벡터 HNSW로 먼저 뽑는 후보 수. 이 안에서 컬럼별 가중 점수로 재정렬
+
+
+def _field_texts(r) -> list[Optional[str]]:
+    """컬럼별 임베딩 원문(본문만). 값이 없으면 None.
+
+    제목을 앞에 붙이면 세 컬럼 벡터가 제목 쪽으로 쏠려 컬럼 간 유사도 차이가 1/2~1/3로 줄었다(CHANGELOG #20).
+    제목은 통합 벡터(embedding)에 들어 있고 후보 선정에 쓰인다.
+    """
+    return [r[col] or None for col in FIELD_COLUMNS]
+
+
 async def embed_pending(limit: int = 100) -> dict:
     """embedding이 없거나 원문이 바뀐 활성 공고를 배치 임베딩한다."""
     limit = max(1, min(int(limit), 500))
@@ -243,17 +260,26 @@ async def embed_pending(limit: int = 100) -> dict:
            FROM job_postings WHERE is_active ORDER BY id""")
     todo = []
     for r in rows:
-        text = _posting_text(r)
-        h = text_hash(text)
+        texts = [_posting_text(r)] + _field_texts(r)   # 통합 1개 + 컬럼별 3개(없으면 None)
+        h = text_hash(EMBED_VERSION + "\x00".join(t or "" for t in texts))
         if h != r["embedding_hash"]:
-            todo.append((r["id"], text, h))
+            todo.append((r["id"], texts, h))
     remaining = max(0, len(todo) - limit)
     todo = todo[:limit]
-    vecs = await embed_documents([t for _, t, _ in todo])
+    flat = [t for _, texts, _ in todo for t in texts if t]
+    it = iter(await embed_documents(flat))
+    params = []
+    for pid, texts, h in todo:
+        vecs = [to_pg(next(it)) if t else None for t in texts]
+        params.append((pid, *vecs, h))
     async with p.acquire() as conn, conn.transaction():
         await conn.executemany(
-            "UPDATE job_postings SET embedding = $2::vector, embedding_hash = $3 WHERE id = $1",
-            [(pid, to_pg(v), h) for (pid, _, h), v in zip(todo, vecs)])
+            """UPDATE job_postings
+               SET embedding = $2::vector, embedding_responsibilities = $3::vector,
+                   embedding_required = $4::vector, embedding_preferred = $5::vector,
+                   embedding_hash = $6
+               WHERE id = $1""",
+            params)
     return {"embedded": len(todo), "remaining": remaining}
 
 
@@ -268,12 +294,22 @@ async def semantic_search_jobs(query: str, category: Optional[str] = None,
                                company_name: Optional[str] = None,
                                location: Optional[str] = None,
                                max_years: Optional[int] = None,
+                               w_responsibilities: float = DEFAULT_WEIGHTS[0],
+                               w_required: float = DEFAULT_WEIGHTS[1],
+                               w_preferred: float = DEFAULT_WEIGHTS[2],
                                only_active: bool = True, limit: int = 20) -> list[dict]:
     """역할·자격요건 의미 기반(임베딩) 공고 검색. query는 원하는 역할/경험을 서술한 문장.
 
-    max_years: 요구 최소 경력이 이 값 이하인 공고(또는 명시 없음)만. similarity는 0~1(클수록 유사).
+    하는 일/필수/우대 역량을 컬럼별로 비교해 가중합한 similarity(0~1, 클수록 유사)로 정렬한다.
+    값이 없는 컬럼은 빼고 나머지 가중치로 정규화하며, 세 컬럼이 모두 없으면 통합 임베딩 유사도를 쓴다.
+    w_*: 컬럼별 가중치(예: 자격요건 위주로 찾을 때 w_required를 높임). sim_*에 컬럼별 유사도도 돌려준다.
+    max_years: 요구 최소 경력이 이 값 이하인 공고(또는 명시 없음)만.
     """
     conds, args = ["j.embedding IS NOT NULL"], [to_pg(await embed_query(query))]
+    weights = [max(0.0, float(w)) for w in (w_responsibilities, w_required, w_preferred)]
+    if not any(weights):
+        weights = list(DEFAULT_WEIGHTS)
+    args += weights   # $2, $3, $4
 
     def add(sql: str, value):
         args.append(value)
@@ -290,13 +326,32 @@ async def semantic_search_jobs(query: str, category: Optional[str] = None,
     if only_active:
         conds.append("j.is_active")
     limit = max(1, min(int(limit), 100))
-    sql = f"""SELECT j.id, c.name AS company, c.industry, j.title, j.url, j.location,
-                     j.employment_type, j.min_years, j.category, j.responsibilities,
-                     j.required_qualifications, j.preferred_qualifications, j.deadline,
-                     1 - (j.embedding <=> $1::vector) AS similarity
-              FROM job_postings j JOIN companies c ON c.id = j.company_id
-              WHERE {" AND ".join(conds)}
-              ORDER BY j.embedding <=> $1::vector LIMIT {limit}"""
+    sql = f"""
+        WITH cand AS (
+            SELECT j.id, c.name AS company, c.industry, j.title, j.url, j.location,
+                   j.employment_type, j.min_years, j.category, j.responsibilities,
+                   j.required_qualifications, j.preferred_qualifications, j.deadline,
+                   1 - (j.embedding <=> $1::vector)                  AS sim_all,
+                   1 - (j.embedding_responsibilities <=> $1::vector) AS sim_responsibilities,
+                   1 - (j.embedding_required <=> $1::vector)         AS sim_required,
+                   1 - (j.embedding_preferred <=> $1::vector)        AS sim_preferred
+            FROM job_postings j JOIN companies c ON c.id = j.company_id
+            WHERE {" AND ".join(conds)}
+            ORDER BY j.embedding <=> $1::vector LIMIT {CANDIDATE_POOL}
+        ), scored AS (
+            SELECT *,
+                   COALESCE($2::float8 * sim_responsibilities, 0) + COALESCE($3::float8 * sim_required, 0)
+                     + COALESCE($4::float8 * sim_preferred, 0) AS num,
+                   (CASE WHEN sim_responsibilities IS NULL THEN 0 ELSE $2::float8 END)
+                     + (CASE WHEN sim_required IS NULL THEN 0 ELSE $3::float8 END)
+                     + (CASE WHEN sim_preferred IS NULL THEN 0 ELSE $4::float8 END) AS den
+            FROM cand
+        )
+        SELECT id, company, industry, title, url, location, employment_type, min_years, category,
+               responsibilities, required_qualifications, preferred_qualifications, deadline,
+               CASE WHEN den > 0 THEN num / den ELSE sim_all END AS similarity,
+               sim_responsibilities, sim_required, sim_preferred
+        FROM scored ORDER BY similarity DESC LIMIT {limit}"""
     p = await pool()
     return [_row(r) for r in await p.fetch(sql, *args)]
 

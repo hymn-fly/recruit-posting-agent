@@ -178,6 +178,19 @@
 - **변경**: `README.md`에 "전체 동작 흐름" 섹션 추가 — ① 구성도(flowchart) ② 공고 적재 sequence ③ Supervisor 한 턴의 state 전이 ④ 대표 시나리오(공고 찾기 → 기업분석 → 부족한 점) sequence ⑤ 프로필 적재 sequence.
 - **검증**: 다이어그램 내용을 현재 코드의 노드·MCP 도구 이름과 대조했다. mermaid-cli 11.4.2로 5개 모두 SVG 렌더링 성공(문법 오류 없음).
 
+### #20 공고 임베딩을 하는 일 / 필수 / 우대 역량 컬럼별 벡터로 분리
+- **왜**: 공고 1건을 벡터 1개(제목+직군+세 컬럼)로만 비교하면, "자격요건 기준으로 잘 맞는 공고"처럼 컬럼별로 따로 보거나 가중치를 줄 수 없다.
+- **변경**
+  - `db/schema.sql` + **Neon 적용 완료**: `job_postings.embedding_responsibilities` / `embedding_required` / `embedding_preferred`(vector 768) + 각 HNSW 인덱스. 기존 통합 `embedding`은 후보 선정·빈 컬럼 대체용으로 유지.
+  - `mcp_server/server.py`
+    - `embed_pending`: 공고당 통합 1개 + 컬럼별 최대 3개를 한 번에 임베딩. hash에 `EMBED_VERSION`을 섞어 방식이 바뀌면 전체가 다시 임베딩되게 했다.
+    - `semantic_search_jobs`: 통합 벡터 HNSW로 후보 200건(`CANDIDATE_POOL`) → 컬럼별 유사도 가중합(`w_responsibilities=0.5, w_required=0.35, w_preferred=0.15`, 값이 없는 컬럼은 빼고 정규화, 셋 다 없으면 통합 유사도)으로 재정렬. 결과에 `sim_responsibilities`/`sim_required`/`sim_preferred` 추가.
+  - `mcp_server/embeddings.py`: 80개 단위로 나눠 보내고, 429(RESOURCE_EXHAUSTED)면 60초 기다렸다가 최대 3회 재시도. Gemini 무료 티어 한도가 분당 임베딩 100건이라 270여 개를 한 번에 보내자 실패했다.
+  - `scripts/embed_postings.py`: 한 번에 25건씩 처리(공고당 텍스트 최대 4개 → 약 100건).
+- **결정: 컬럼 벡터에는 제목을 붙이지 않는다** — 처음에는 맥락을 주려고 제목을 앞에 붙였는데, 세 컬럼 유사도가 거의 같아졌다(예: 0.752/0.732/0.752). 공고 3건 × 질의 2개로 비교해 보니 본문만 임베딩할 때 컬럼 간 유사도 폭이 2~3배 컸다(id 149: 0.041 → 0.084). 제목은 통합 벡터에 들어 있다.
+- **검증**: 활성 77건 — 통합 77, 하는 일 66/66, 필수 66/66, 우대 63/63(원문이 있는 컬럼 수와 일치). 재실행 시 0건(멱등). "Kubernetes 운영·모델 서빙 최적화" 질의에서 기본 가중치는 MLOps Engineer(id 97)가 1위, 필수 역량만(`w_required=1`) 보면 필수 유사도 0.791인 LLM Inference Engineer(id 92)가 1위로 바뀐다. MCP 경유 채용공고 조회 Agent 질의 2개 정상(33초, 13초).
+- **참고**: 채용공고 조회 Agent는 아직 기본 가중치만 쓴다. 질문에 따라 가중치를 바꾸게 하려면 `JobSearchPlan`에 가중치 필드를 추가하면 된다.
+
 ---
 
 ## 미해결 / 다음 후보

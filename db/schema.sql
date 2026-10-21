@@ -79,10 +79,25 @@ COMMENT ON COLUMN job_postings.last_seen_at             IS '가장 최근 스크
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding      vector(768);
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding_hash TEXT;
 COMMENT ON COLUMN job_postings.embedding      IS '제목·직군·하는 일·필수/우대 역량을 합친 텍스트의 임베딩 (gemini-embedding-001, 768차원). RAG 검색용';
-COMMENT ON COLUMN job_postings.embedding_hash IS '임베딩한 원문 텍스트의 sha256. 본문이 바뀌어 값이 달라지면 재임베딩 대상';
+COMMENT ON COLUMN job_postings.embedding_hash IS '임베딩 버전 + 통합/컬럼별 원문의 sha256. 본문이나 임베딩 방식이 바뀌면 값이 달라져 재임베딩 대상';
 
 CREATE INDEX IF NOT EXISTS idx_job_postings_embedding
     ON job_postings USING hnsw (embedding vector_cosine_ops);
+
+-- 컬럼별 임베딩: 하는 일 / 필수 / 우대 역량을 따로 비교해 가중합 점수를 낸다 (값이 없는 컬럼은 NULL)
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding_responsibilities vector(768);
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding_required         vector(768);
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding_preferred        vector(768);
+COMMENT ON COLUMN job_postings.embedding_responsibilities IS '하는 일(responsibilities) 본문만의 임베딩(768차원). 값이 없으면 NULL';
+COMMENT ON COLUMN job_postings.embedding_required         IS '필수 역량(required_qualifications) 본문만의 임베딩(768차원). 값이 없으면 NULL';
+COMMENT ON COLUMN job_postings.embedding_preferred        IS '우대 역량(preferred_qualifications) 본문만의 임베딩(768차원). 값이 없으면 NULL';
+
+CREATE INDEX IF NOT EXISTS idx_job_postings_emb_resp
+    ON job_postings USING hnsw (embedding_responsibilities vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_job_postings_emb_req
+    ON job_postings USING hnsw (embedding_required vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_job_postings_emb_pref
+    ON job_postings USING hnsw (embedding_preferred vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_job_postings_category ON job_postings(category);
 CREATE INDEX IF NOT EXISTS idx_job_postings_active   ON job_postings(is_active);
 CREATE INDEX IF NOT EXISTS idx_job_postings_company  ON job_postings(company_id);
