@@ -205,6 +205,18 @@
 - **변경**: `agents/query_graph.py` — 예시의 안쪽 따옴표를 작은따옴표로 교체(같은 프롬프트의 `'개발자'` 표기와 통일).
 - **검증**: `py_compile`로 agents/mcp_server/scripts 전체 컴파일 통과. `main_query.py "PyTorch 실무 경력 3년 이상 요구하는 ML 엔지니어 공고"` 실행 → SK 제조 AI 이미지 분류 ML 엔지니어 공고 답변(PyTorch 요구 여부가 공고에 없다는 점도 명시).
 
+### #23 Agent별 테스트(tests/) 추가 + README에 폴더 구조·파일 설명
+- **왜**: 각 Agent를 따로 호출해 검증할 방법이 없었다(지금까지는 scratchpad 스크립트로 수동 확인). 또 폴더/파일 구성 설명이 대화에만 있고 문서에 없었다.
+- **변경**
+  - `tests/` 신규. LangChain 공식 템플릿(langchain-ai/react-agent)의 `tests/unit_tests` + `tests/integration_tests` + `conftest.py` 구성을 따랐다.
+    - `tests/conftest.py`: 가짜 LLM(`fake_llm` — schema별 응답 등록, 받은 prompt 기록), 가짜 MCP 도구(`make_tools` — 실제 MCP처럼 text content block으로 감쌈), `--run-integration` 옵션(없으면 integration 테스트 skip).
+    - `tests/unit_tests/` (13개, 네트워크 없음, 약 1초): 채용공고 조회(ranking 순서·없는 id 제거·필터 전달·결과 없음 시 rerank 생략·프로필 반영), 내 프로필(프로필 없음 안내·요구사항별 근거 검색·판정표/기업분석 리포트 반영·범위 밖 index 무시), 기업분석(5개 토픽 검색·출처 전체 번호 재매김·인용 출처만·계열사로 캐시 조회/저장·캐시 적중 시 role만 검색), Supervisor(바로 답변·검색 후 후보 저장·번호로 선택 후 기업분석→갭 체인·공고 미선택 시 되묻기·같은 Agent 재실행 방지·Tavily 키 없음 안내).
+    - `tests/integration_tests/` (5개): MCP `semantic_search_jobs`, Agent 3개 단독 실행, Supervisor 한 턴. MCP 세션은 각 테스트 안에서 `open_tools()`로 연다(pytest-asyncio yield 픽스처는 setup/teardown task가 달라 anyio cancel scope 오류가 났다).
+  - `pyproject.toml`: dev 의존성 `pytest`, `pytest-asyncio`, `[tool.pytest.ini_options]`(asyncio auto, `integration` 마커).
+  - `README.md`: 폴더 구조, 파일별 설명(agents/mcp_server/테이블/그 밖), 테스트 실행 방법.
+- **검증**: `uv run pytest` → 13 passed, 5 skipped(integration). 일부러 코드를 깨는 mutation 3건(출처 필터 제거, Supervisor 재실행 방지 제거, 없는 id 필터 제거) → 해당 테스트 3개가 정확히 실패했고, 원복 후 통과. `--run-integration` → 4 passed, 1 skipped(프로필 자료 없음), 153초.
+- **DB 영향**: integration의 기업분석 테스트가 `company_research`에 리서치 1행을 저장했다(실제 데이터, 캐시로 사용).
+
 ---
 
 ## 미해결 / 다음 후보
