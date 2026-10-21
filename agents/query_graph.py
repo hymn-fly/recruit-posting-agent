@@ -40,7 +40,7 @@ def make_graph(tools: dict):
             "- 직무명(예: 백엔드 개발자, ML 엔지니어)을 찾는 질문이면 title_keywords에 짧은 핵심 단어(한글/영문 표기 포함)를 넣는다. "
             "제목에 부분일치로 걸리므로 '개발자' 같은 흔한 단어는 피한다.\n"
             "- 하는 일에 대한 질문이면 q_responsibilities, 필수 자격요건이면 q_required, 우대사항이면 q_preferred에 "
-            "공고 본문에 실제로 적혀 있을 법한 문장 형태(예: "PyTorch 실무 경력 3년 이상")로 서술한다. 해당되는 필드만 채운다(여러 개 가능).\n"
+            "공고 본문에 실제로 적혀 있을 법한 문장 형태(예: 'PyTorch 실무 경력 3년 이상')로 서술한다. 해당되는 필드만 채운다(여러 개 가능).\n"
             "- category 예: AI Engineer / ML Engineer / LLM Engineer / MLOps / Data. 명시된 경우만.\n\n"
             f"질문: {state['question']}")
         return {"params": params}

@@ -200,6 +200,11 @@
 - **검증**: 실제 Neon·Gemini로 `search_jobs` 직접 호출(제목만 / 하는 일 / 필수+우대+제목 / 조건 없음)과 MCP 경유 `query_graph` 3개 질의 — "백엔드 개발자" → `title_keywords=[백엔드, Backend]`, "RAG 파이프라인을 구축하는 일" → `q_responsibilities`(유사도 0.77), "PyTorch 3년+ / 쿠버네티스 우대" → `q_required`+`q_preferred`(0.74).
 - **참고**: Supervisor의 조회 Agent(`job_search_graph`)는 이미 `semantic_search_jobs`를 쓰므로 변경 없음. 제목 키워드와 임베딩 질의는 AND로 결합된다.
 
+### #22 질의 에이전트 프롬프트 문자열 SyntaxError 수정
+- **왜**: #21에서 `plan_search` 프롬프트 예시를 `(예: "PyTorch 실무 경력 3년 이상")`처럼 큰따옴표로 감쌌는데, 바깥 문자열도 큰따옴표라 문자열이 중간에 끝나 `agents/main_query.py` 실행 시 import 단계에서 SyntaxError가 났다.
+- **변경**: `agents/query_graph.py` — 예시의 안쪽 따옴표를 작은따옴표로 교체(같은 프롬프트의 `'개발자'` 표기와 통일).
+- **검증**: `py_compile`로 agents/mcp_server/scripts 전체 컴파일 통과. `main_query.py "PyTorch 실무 경력 3년 이상 요구하는 ML 엔지니어 공고"` 실행 → SK 제조 AI 이미지 분류 ML 엔지니어 공고 답변(PyTorch 요구 여부가 공고에 없다는 점도 명시).
+
 ---
 
 ## 미해결 / 다음 후보
