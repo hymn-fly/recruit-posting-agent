@@ -159,8 +159,19 @@
   - `agents/mcp_client.py`: `open_tools()` — 서버별 세션을 계속 열어 두는 컨텍스트 매니저(기존 `get_tools()`는 호출마다 서버 프로세스를 띄움).
   - `agents/state.py`: `ResearchPlan`/`TopicQueries`/`ResearchState`, `Route`/`AppState`. `README.md`/`PLAN.md`: 사용법·체크리스트.
 - **검증**: 대화 4턴 — 인사 → FINISH 안내, "LLM 에이전트 개발 공고" → job_search 5건 후 FINISH, "2번 공고 기준 부족한 점" → id 149 선택 후 profile_gap, "기업분석" → company_research. `/id 154` 선택 후 기업분석 요청 시 키 안내 메시지. `get_cached_research`/`save_research` 저장·조회 후 테스트 행 삭제.
-- **미검증**: `TAVILY_API_KEY`가 없어 기업분석 리포트를 실제로 생성하지 못함(검색 → 요약 → 리포트, 캐시 적중).
+- **미검증 → #18에서 검증**: 이 시점에는 `TAVILY_API_KEY`가 없어 기업분석 리포트를 실제로 생성하지 못했다.
 - **테스트 데이터 정리**: #16의 가상 인물 프로필(`test_resume.md`, `test_portfolio.docx`)과 요약을 삭제(`profile_*` 0행).
+
+### #18 기업분석: 그룹 포털 공고의 실제 계열사 판별 + 인용된 출처만 표시
+- **왜**: Tavily 키를 넣고 실제로 돌려보니, SK 포털의 티맵모빌리티 공고(id 154)를 분석하면서 산업을 "SK그룹 통신·에너지·반도체"로 잡았다. 또 캐시 키가 `companies` 행("SK")이라, 다음 SK AX 공고 분석 때 티맵의 산업 분석을 재사용할 상황이었다. SK/LG/현대/롯데/CJ처럼 한 포털에 여러 계열사가 섞인 회사는 모두 해당된다. 출처 목록도 인용 여부와 관계없이 50개를 전부 나열했다.
+- **변경**
+  - `db/schema.sql` + **Neon 적용 완료**: `company_research.target_company` 추가. 키 없이 저장된 첫 실행 1행은 캐시로 쓸 수 없어 삭제했다.
+  - `agents/state.py`: `ResearchPlan.target_company`(실제 채용 법인/계열사).
+  - `agents/company_research_graph.py`: 순서를 `plan_queries`(계열사 판별 + 5개 토픽 검색어) → `load_cache`(회사+계열사로 조회) → 캐시에 없는 토픽만 병렬 검색으로 바꿨다. 요약·리포트 프롬프트에 분석 대상 계열사를 명시하고, 리포트 제목을 계열사명으로 했다. 출처 목록에는 본문에 인용된 번호만 남긴다(원래 번호 유지).
+  - `mcp_server/server.py`: `get_cached_research`/`save_research`에 `target_company` 인자 추가.
+- **검증**(실제 Tavily 호출): id 154 → "티맵모빌리티"(경쟁사 카카오모빌리티·네이버지도 등) 79초. id 151 → "SK AX"(경쟁사 삼성SDS·LG CNS 등), 같은 SK 포털이지만 캐시 미적중(의도대로) 84초. id 154 재실행 → 회사 단위 토픽 4개 캐시 적중, role 토픽만 검색(Tavily 10회→2회). 출처 50개 → 인용된 22~28개.
+- **관찰**: 캐시가 적중해도 소요 시간은 85초로 줄지 않았다. 최종 리포트 작성(LLM 1회, 긴 프롬프트)이 대부분이라 검색 절약은 시간보다 Tavily 쿼터·비용 절감 효과다.
+- **DB 상태**: 위 검증의 리서치 3행(티맵 2, SK AX 1)은 실제 데이터라 캐시로 남겨 두었다.
 
 ---
 

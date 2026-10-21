@@ -65,7 +65,7 @@
 ### 8단계 — Multi-Agent (2026-10-21, 상세 계획은 CHANGELOG #15~#17)
 - [x] P1 채용공고 조회 Agent: pgvector 임베딩 RAG (`agents/job_search_graph.py`, `semantic_search_jobs`)
 - [x] P2 내 프로필 Agent: 이력서 적재(`scripts/ingest_profile.py`) + `profile-db` MCP + gap 분석(`agents/profile_gap_graph.py`)
-- [x] P3 기업분석 Agent: Tavily 리서치, 회사 단위 토픽 14일 캐시 (`agents/company_research_graph.py`) — 코드 완료, **TAVILY_API_KEY 받은 뒤 실행 검증 필요**
+- [x] P3 기업분석 Agent: Tavily 리서치, 회사 단위 토픽 14일 캐시 (`agents/company_research_graph.py`), 그룹 포털 계열사 판별 (CHANGELOG #18)
 - [x] P4 Supervisor + 대화 CLI (`agents/supervisor.py`, `agents/main_chat.py`)
 - [ ] 실제 이력서/경력기술서/포트폴리오 적재
 - [ ] 이후: 대화 영속화(Postgres checkpointer), 하이브리드 검색(키워드+벡터), 자소서 초안 Agent, 신규 매칭 공고 알림

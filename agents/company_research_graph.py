@@ -1,4 +1,4 @@
-"""기업분석 Agent: load_cache -> plan_queries -> search_topic(토픽별 병렬, Tavily) -> synthesize.
+"""기업분석 Agent: plan_queries(실제 계열사 판별 포함) -> load_cache -> search_topic(토픽별 병렬, Tavily) -> synthesize.
 
 회사 단위 토픽(industry/outlook/competitors/company)은 CACHE_DAYS 이내 결과가 있으면 재사용하고,
 직무 토픽(role)과 최종 리포트는 공고마다 새로 만든다.
@@ -51,25 +51,27 @@ def make_graph(tools: dict):
     summarizer = LLM(primary_timeout=30)
     writer = LLM(primary_timeout=60)
 
-    async def load_cache(state: ResearchState) -> ResearchState:
-        cached = _one(await tools["get_cached_research"].ainvoke(
-            {"company_name": state["posting"]["company"], "max_age_days": CACHE_DAYS}))
-        return {"cached": [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]}
-
     async def plan_queries(state: ResearchState) -> ResearchState:
-        need = [t for t in TOPIC_TITLES if t not in {c["topic"] for c in state["cached"]}]
         plan = await planner.ainvoke(
-            "채용 지원자를 위한 기업분석 리서치 계획을 세워라. 아래 토픽마다 웹 검색어 2개를 만든다 "
+            "채용 지원자를 위한 기업분석 리서치 계획을 세워라. 먼저 실제 채용 법인/계열사(target_company)를 정한다 "
+            "— 회사명이 그룹(SK, LG, 현대, 롯데, CJ 등)이면 제목·근무지·하는 일에 적힌 계열사가 대상이다. "
+            "산업·경쟁사·검색어는 모두 그 계열사 기준으로 만든다. 아래 토픽마다 웹 검색어 2개를 만든다 "
             "(한국 기업이면 한국어 검색어, 최신 동향을 위해 연도 포함 가능).\n"
-            + "\n".join(f"- {t}: {TOPIC_TITLES[t]}" for t in need)
-            + f"\n\n{_posting_brief(state['posting'])}")
-        plan.topics = [t for t in plan.topics if t.topic in need]
+            + "\n".join(f"- {t}: {TOPIC_TITLES[t]}" for t in TOPIC_TITLES)
+            + f"\n\n{_posting_brief(state['posting'])}\n근무지: {state['posting'].get('location') or '-'}")
         return {"plan": plan}
 
+    async def load_cache(state: ResearchState) -> ResearchState:
+        cached = _one(await tools["get_cached_research"].ainvoke(
+            {"company_name": state["posting"]["company"], "target_company": state["plan"].target_company,
+             "max_age_days": CACHE_DAYS}))
+        return {"cached": [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]}
+
     def fan_out(state: ResearchState):
+        done = {c["topic"] for c in state["cached"]}
         sends = [Send("search_topic", {"posting": state["posting"], "plan": state["plan"],
                                        "topic": t.topic, "queries": t.queries})
-                 for t in state["plan"].topics]
+                 for t in state["plan"].topics if t.topic not in done]
         return sends or ["synthesize"]
 
     async def search_topic(arg: dict) -> ResearchState:
@@ -92,13 +94,14 @@ def make_graph(tools: dict):
             f"주제 '{TOPIC_TITLES[topic]}'에 대해 아래 검색 결과만 근거로 핵심을 한국어 bullet 5~8개로 요약하라. "
             "각 bullet 끝에 근거 출처 번호를 [n]으로 단다. 검색 결과에 없는 내용은 쓰지 않는다. "
             "수치·연도는 출처에 적힌 그대로.\n"
-            f"산업: {plan.industry} / 경쟁사: {', '.join(plan.competitors)}\n{_posting_brief(arg['posting'])}\n\n"
+            f"분석 대상: {plan.target_company} / 산업: {plan.industry} / 경쟁사: {', '.join(plan.competitors)}\n"
+            f"{_posting_brief(arg['posting'])}\n\n"
             + "\n\n".join(f"[{i}] {s['title']} ({s['url']})\n{s['content']}" for i, s in enumerate(sources, 1)))
         return {"topics": [{"topic": topic, "summary": msg.text,
                             "sources": [{"title": s["title"], "url": s["url"]} for s in sources]}]}
 
     async def synthesize(state: ResearchState) -> ResearchState:
-        p = state["posting"]
+        p, plan = state["posting"], state["plan"]
         order = {t: i for i, t in enumerate(TOPIC_TITLES)}
         topics = sorted(state["cached"] + state.get("topics", []), key=lambda t: order[t["topic"]])
         # 토픽별 로컬 [n]을 전체 출처 번호로 바꾼다
@@ -117,12 +120,15 @@ def make_graph(tools: dict):
             "구체적 아이디어 3~5개, 면접·자소서에서 쓸 수 있게) / ## 한 줄 요약.\n"
             "모든 사실 문장에는 요약에 있는 출처 번호 [n]을 그대로 유지한다. 근거가 없으면 '확인 불가'라고 쓴다. "
             "기여 아이디어는 근거를 바탕으로 한 제안임을 분명히 한다. 3500자 이내.\n\n"
+            f"분석 대상 회사: {plan.target_company} (채용 포털: {p['company']}) / 산업: {plan.industry}\n"
             f"{_posting_brief(p)}\n필수 역량: {(p.get('required_qualifications') or '-')[:600]}\n\n"
             + "\n\n".join(blocks))
-        refs = "\n".join(f"[{i}] {s['title']} — {s['url']}" for i, s in enumerate(all_sources, 1))
-        report = f"{msg.text}\n\n## 출처\n{refs}"
-        await tools["save_research"].ainvoke({"company_name": p["company"], "posting_id": p.get("id"),
-                                              "topics": topics, "report_md": report})
+        cited = {int(n) for n in re.findall(r"\[(\d+)\]", msg.text)}   # 본문에 인용된 출처만 목록에 남긴다
+        refs = "\n".join(f"[{i}] {s['title']} — {s['url']}"
+                         for i, s in enumerate(all_sources, 1) if i in cited)
+        report = f"# {plan.target_company} 기업분석\n\n{msg.text}\n\n## 출처\n{refs}"
+        await tools["save_research"].ainvoke({"company_name": p["company"], "target_company": plan.target_company,
+                                              "posting_id": p.get("id"), "topics": topics, "report_md": report})
         cache_note = (f"\n\n_(회사 단위 토픽 {len(state['cached'])}개는 최근 {CACHE_DAYS}일 내 리서치를 재사용)_"
                       if state["cached"] else "")
         return {"report": report, "answer": report + cache_note}
@@ -132,9 +138,9 @@ def make_graph(tools: dict):
     g.add_node("plan_queries", plan_queries)
     g.add_node("search_topic", search_topic)
     g.add_node("synthesize", synthesize)
-    g.add_edge(START, "load_cache")
-    g.add_edge("load_cache", "plan_queries")
-    g.add_conditional_edges("plan_queries", fan_out, ["search_topic", "synthesize"])
+    g.add_edge(START, "plan_queries")
+    g.add_edge("plan_queries", "load_cache")
+    g.add_conditional_edges("load_cache", fan_out, ["search_topic", "synthesize"])
     g.add_edge("search_topic", "synthesize")
     g.add_edge("synthesize", END)
     return g.compile()

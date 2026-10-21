@@ -216,4 +216,8 @@ COMMENT ON COLUMN company_research.topics     IS '토픽별 요약과 출처 [{t
 COMMENT ON COLUMN company_research.report_md  IS '최종 리포트 (마크다운, [n] 출처 번호 포함)';
 COMMENT ON COLUMN company_research.created_at IS '분석 시각 (캐시 만료 판단 기준)';
 
+-- 그룹 포털(SK, LG, 현대 등)은 companies 1행에 여러 계열사 공고가 섞이므로 실제 채용 계열사로 캐시를 나눈다
+ALTER TABLE company_research ADD COLUMN IF NOT EXISTS target_company TEXT;
+COMMENT ON COLUMN company_research.target_company IS '실제 채용 법인/계열사(예: SK 포털의 티맵모빌리티). 캐시 재사용 키 (company_id, target_company)';
+
 CREATE INDEX IF NOT EXISTS idx_company_research_company ON company_research(company_id, created_at DESC);

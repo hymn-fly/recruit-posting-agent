@@ -144,6 +144,7 @@ class TopicQueries(BaseModel):
 
 
 class ResearchPlan(BaseModel):
+    target_company: str = Field(description="실제 채용 법인/계열사명. 그룹 채용 포털이면 제목·근무지·본문에 적힌 계열사(예: 티맵모빌리티), 아니면 회사명 그대로")
     industry: str = Field(description="회사가 속한 산업(세부 분야까지). 예: 자동차 SW/모빌리티 IT서비스")
     competitors: list[str] = Field(description="같은 산업의 주요 경쟁사 3~5곳")
     topics: list[TopicQueries]
