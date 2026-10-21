@@ -79,6 +79,55 @@ class Ranking(BaseModel):
     picks: list[Pick] = Field(description="가장 잘 맞는 순서. 최대 5건, 맞는 게 없으면 빈 리스트")
 
 
+class Project(BaseModel):
+    name: str
+    role: Optional[str] = None
+    period: Optional[str] = None
+    tech: list[str] = []
+    achievements: list[str] = Field([], description="문서에 적힌 성과(수치 포함)만")
+
+
+class ProfileSummary(BaseModel):
+    """프로필 문서 전체를 요약한 구조화 프로필 (profile_summary 테이블에 저장)."""
+    headline: str = Field(description="한 줄 소개. 예: '백엔드 5년차, 최근 2년 LLM 서비스 개발'")
+    total_years: Optional[float] = Field(None, description="총 경력 연차. 문서로 계산 불가하면 null")
+    skills: list[str] = Field(description="기술 스택·도구")
+    domains: list[str] = Field(description="경험한 산업/업무 도메인")
+    projects: list[Project]
+    education_certs: list[str] = []
+    strengths: list[str] = Field(description="문서 근거로 보이는 강점 3~5개")
+
+
+class Requirement(BaseModel):
+    text: str = Field(description="요구사항 1개를 독립적으로 이해되게 서술")
+    type: Literal["required", "preferred"]
+
+
+class Requirements(BaseModel):
+    items: list[Requirement] = Field(description="중복 없이 최대 12개")
+
+
+class Assessment(BaseModel):
+    index: int = Field(description="요구사항 번호")
+    status: Literal["충족", "부분", "미충족"]
+    evidence: Optional[str] = Field(None, description="근거가 되는 프로필 원문 인용(그대로). 없으면 null")
+    comment: str = Field(description="판단 이유 한 줄")
+
+
+class Assessments(BaseModel):
+    items: list[Assessment]
+
+
+class ProfileGapState(TypedDict, total=False):
+    posting: dict            # get_job_posting 결과
+    research_report: str     # 기업분석 리포트(있으면 보완 방향에 반영)
+    summary: dict            # get_profile_summary 결과
+    requirements: list[Requirement]
+    evidence: list[list[dict]]   # 요구사항별 search_profile 결과
+    assessments: list[Assessment]
+    answer: str
+
+
 class JobSearchState(TypedDict, total=False):
     question: str
     profile: str             # 프로필 요약(있으면 검색문·추천에 반영)

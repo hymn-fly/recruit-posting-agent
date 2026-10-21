@@ -137,6 +137,17 @@
 - **검증**: 활성 공고 77건 임베딩, 재실행 시 0건(멱등). MCP 도구 12개 로딩. 질의 2개 — "LLM 에이전트 + RAG 파이프라인" → SK AI Agent 계열 4건 + CJ 1건(유사도 0.73~0.78), "MLOps 3년차 모델 서빙" → LG AI연구원 MLOps Engineer. 응답 시간은 서킷 브레이커 적용 전 55초에서 적용 후 12~26초.
 - **미검증**: Claude Desktop 예약 작업에서 `embed_pending_postings` 호출(실행 환경에 `GOOGLE_API_KEY` 필요. `.env`에서 읽는다).
 
+### #16 내 프로필 Agent (Multi-Agent P2)
+- **왜**: 이력서·경력기술서·포트폴리오를 기억해 두고, 공고 대비 부족한 점과 보완 방법을 근거와 함께 알려주는 Agent가 필요하다.
+- **변경**
+  - `db/schema.sql` + **Neon 적용 완료**: `profile_documents`(파일 1개=1행, 파일명 유니크, 내용 hash), `profile_chunks`(약 800자/겹침 100자, 임베딩, HNSW), `profile_summary`(LLM 구조화 요약, 단일 행).
+  - `scripts/ingest_profile.py` 신규: PDF(pypdf)/DOCX(python-docx, 표 포함)/MD/TXT 추출 → 문단 우선 청킹 → 임베딩 → 저장. 내용이 같으면 건너뛰고 바뀌면 조각까지 교체. 변경이 있으면 `profile_summary` 재생성. `--summary-only` 지원.
+  - `mcp_server/profile_server.py` 신규(`profile-db`): `get_profile_summary`, `search_profile`, `list_profile_documents`(읽기 전용). `job-db`와 분리해 예약 작업에는 개인 자료가 노출되지 않게 했다. `agents/mcp_client.py`에 두 번째 서버로 등록.
+  - `agents/profile_gap_graph.py` 신규: `load`(요약 없으면 적재 안내) → `decompose`(필수/우대 역량을 최대 12개 요구사항으로) → `match`(요구사항별 `search_profile` 병렬 + LLM 1회로 충족/부분/미충족 판정·원문 인용) → `synthesize`(강점/부족한 점/보완 방법 상위 4개/면접 질문 3개, 2500자 이내). 기업분석 리포트가 있으면 보완 방향에 반영.
+  - `agents/state.py`: `ProfileSummary`, `Requirement(s)`, `Assessment(s)`, `ProfileGapState`. `.gitignore`: `data/`. `README.md`: 적재 방법·개인정보 주의.
+- **검증**: 가상 인물 테스트 자료(MD 이력서 + DOCX 포트폴리오)로 적재 → 요약 생성, 같은 파일 재적재 시 "변경 없음" 건너뜀. 긴 텍스트 청킹(12조각, 겹침 일치). MCP 도구 15개 로딩. 공고 id 149(SK AI Agent 개발자)로 분석 → 12개 요구사항 판정, "경력 5년 이상" 필수 미충족(4년)과 Kubernetes 부족을 정확히 짚었고 근거 인용은 원문과 일치. 첫 실행 124초(Gemma 타임아웃 30초 포함), 분량 제한을 추가한 뒤 섹션 구성만 다시 확인했다(소요 시간은 재측정하지 않음).
+- **테스트 데이터**: 가상 인물 자료는 P4 통합 테스트 뒤 삭제 예정.
+
 ---
 
 ## 미해결 / 다음 후보

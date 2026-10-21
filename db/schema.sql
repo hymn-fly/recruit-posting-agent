@@ -141,3 +141,57 @@ COMMENT ON COLUMN filtered_postings.last_seen_at   IS '가장 최근에 다시 �
 
 CREATE INDEX IF NOT EXISTS idx_filtered_postings_company ON filtered_postings(company_id);
 CREATE INDEX IF NOT EXISTS idx_filtered_postings_stage   ON filtered_postings(stage);
+
+-- ---------------------------------------------------------------
+-- 내 프로필 Agent: 이력서/경력기술서/포트폴리오 (개인 자료, profile-db MCP 서버만 접근)
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS profile_documents (
+    id           SERIAL PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    filename     TEXT NOT NULL UNIQUE,
+    content_hash TEXT NOT NULL,
+    raw_text     TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_profile_documents_kind CHECK (kind IN ('resume', 'career', 'portfolio', 'other'))
+);
+
+COMMENT ON TABLE  profile_documents IS '사용자가 넣은 이력서·경력기술서·포트폴리오 원문. 파일 1개가 1행';
+COMMENT ON COLUMN profile_documents.id           IS '문서 고유 번호 (자동 증가)';
+COMMENT ON COLUMN profile_documents.kind         IS '문서 종류: resume(이력서) | career(경력기술서) | portfolio(포트폴리오) | other';
+COMMENT ON COLUMN profile_documents.filename     IS '원본 파일명 (유니크). 같은 파일명을 다시 넣으면 내용을 교체';
+COMMENT ON COLUMN profile_documents.content_hash IS '추출 텍스트의 sha256. 같으면 재적재를 건너뜀';
+COMMENT ON COLUMN profile_documents.raw_text     IS 'PDF/DOCX/MD에서 추출한 전체 텍스트';
+COMMENT ON COLUMN profile_documents.created_at   IS '처음 적재한 시각';
+COMMENT ON COLUMN profile_documents.updated_at   IS '내용이 마지막으로 바뀐 시각';
+
+CREATE TABLE IF NOT EXISTS profile_chunks (
+    id          SERIAL PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES profile_documents(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    text        TEXT NOT NULL,
+    embedding   vector(768) NOT NULL,
+    UNIQUE (document_id, chunk_index)
+);
+
+COMMENT ON TABLE  profile_chunks IS '프로필 문서를 검색용으로 나눈 조각과 임베딩';
+COMMENT ON COLUMN profile_chunks.id          IS '조각 고유 번호 (자동 증가)';
+COMMENT ON COLUMN profile_chunks.document_id IS '원본 문서 (profile_documents.id 참조, 문서 삭제/교체 시 함께 삭제)';
+COMMENT ON COLUMN profile_chunks.chunk_index IS '문서 안에서의 순서 (0부터)';
+COMMENT ON COLUMN profile_chunks.text        IS '조각 원문 (약 800자, 앞 조각과 100자 겹침)';
+COMMENT ON COLUMN profile_chunks.embedding   IS '조각 임베딩 (gemini-embedding-001, 768차원)';
+
+CREATE INDEX IF NOT EXISTS idx_profile_chunks_embedding
+    ON profile_chunks USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS profile_summary (
+    id         INTEGER PRIMARY KEY DEFAULT 1,
+    summary    JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_profile_summary_single CHECK (id = 1)
+);
+
+COMMENT ON TABLE  profile_summary IS '전체 프로필 문서를 LLM이 요약한 구조화 프로필. 항상 1행';
+COMMENT ON COLUMN profile_summary.id         IS '항상 1 (단일 행)';
+COMMENT ON COLUMN profile_summary.summary    IS '스킬·총 경력 연차·도메인·주요 프로젝트(성과 포함)·학력/자격 JSON';
+COMMENT ON COLUMN profile_summary.updated_at IS '마지막으로 다시 요약한 시각';
