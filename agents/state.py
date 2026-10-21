@@ -1,5 +1,7 @@
-from typing import Literal, Optional, TypedDict
+import operator
+from typing import Annotated, Literal, Optional, TypedDict
 
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 
@@ -126,6 +128,61 @@ class ProfileGapState(TypedDict, total=False):
     evidence: list[list[dict]]   # 요구사항별 search_profile 결과
     assessments: list[Assessment]
     answer: str
+
+
+# ---------------------------------------------------------------
+# 기업분석 Agent (Research)
+# ---------------------------------------------------------------
+# industry~company는 회사 단위(캐시 재사용), role은 공고 직무 단위(매번 새로)
+TopicKey = Literal["industry", "outlook", "competitors", "company", "role"]
+COMPANY_TOPICS = ("industry", "outlook", "competitors", "company")
+
+
+class TopicQueries(BaseModel):
+    topic: TopicKey
+    queries: list[str] = Field(description="웹 검색어 2개. 회사명·산업명·연도 등 구체 키워드 포함")
+
+
+class ResearchPlan(BaseModel):
+    industry: str = Field(description="회사가 속한 산업(세부 분야까지). 예: 자동차 SW/모빌리티 IT서비스")
+    competitors: list[str] = Field(description="같은 산업의 주요 경쟁사 3~5곳")
+    topics: list[TopicQueries]
+
+
+class ResearchState(TypedDict, total=False):
+    posting: dict
+    cached: list[dict]           # 재사용하는 회사 단위 토픽
+    plan: ResearchPlan
+    topics: Annotated[list[dict], operator.add]   # {topic, summary, sources}: 병렬 노드 결과 누적
+    report: str
+    answer: str
+
+
+# ---------------------------------------------------------------
+# Supervisor (3개 Agent 조율)
+# ---------------------------------------------------------------
+AgentName = Literal["job_search", "company_research", "profile_gap"]
+
+
+class Route(BaseModel):
+    next: Literal["job_search", "company_research", "profile_gap", "FINISH"]
+    posting_number: Optional[int] = Field(None, description="사용자가 '2번 공고'처럼 추천 목록 번호로 가리키면 그 번호")
+    posting_id: Optional[int] = Field(None, description="사용자가 공고 id를 직접 말하면 그 id")
+    use_profile: bool = Field(False, description="job_search에서 '나한테 맞는'처럼 사용자 본인 경력 기준 검색을 원하면 true")
+    reply: Optional[str] = Field(None, description="FINISH이면서 Agent 결과가 없을 때(인사/사용법 질문/공고 선택 요청 등) 사용자에게 할 말")
+    reason: str = Field(description="이렇게 판단한 이유 한 줄")
+
+
+class AppState(TypedDict, total=False):
+    messages: Annotated[list, add_messages]
+    candidates: list[dict]       # 최근 job_search 추천 목록 (번호 = 인덱스+1)
+    selected_posting: dict       # 분석 대상 공고 (get_job_posting 결과)
+    research_report: str         # selected_posting 기준 기업분석 리포트
+    research_posting_id: int     # research_report가 어느 공고 기준인지
+    gap_report: str
+    route: dict                  # Route.model_dump()
+    steps: int                   # 이번 턴에 실행한 Agent 수 (턴마다 0으로 초기화)
+    turn_outputs: list[dict]     # 이번 턴 Agent 결과 [{agent, text}] (턴마다 초기화)
 
 
 class JobSearchState(TypedDict, total=False):

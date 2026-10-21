@@ -1,0 +1,140 @@
+"""기업분석 Agent: load_cache -> plan_queries -> search_topic(토픽별 병렬, Tavily) -> synthesize.
+
+회사 단위 토픽(industry/outlook/competitors/company)은 CACHE_DAYS 이내 결과가 있으면 재사용하고,
+직무 토픽(role)과 최종 리포트는 공고마다 새로 만든다.
+"""
+import asyncio
+import json
+import re
+
+from langchain_tavily import TavilySearch
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
+
+from agents.llm import LLM
+from agents.query_graph import _parse
+from agents.state import COMPANY_TOPICS, ResearchPlan, ResearchState
+
+CACHE_DAYS = 14
+RESULTS_PER_QUERY = 5
+SNIPPET_LEN = 1200
+
+TOPIC_TITLES = {
+    "industry": "산업 현황",
+    "outlook": "산업 발전 방향",
+    "competitors": "주요 경쟁사와 동향",
+    "company": "해당 기업의 전략·최근 행보",
+    "role": "직무 관련 기술·업무 동향",
+}
+
+
+def _one(raw) -> dict:
+    items = _parse(raw)
+    return items[0] if items else {}
+
+
+def _posting_brief(p: dict) -> str:
+    return (f"회사: {p.get('company')} (산업: {p.get('industry') or '미상'})\n"
+            f"공고: {p.get('title')} / 직군: {p.get('category')}\n"
+            f"하는 일: {(p.get('responsibilities') or '-')[:800]}")
+
+
+def make_graph(tools: dict):
+    _tavily: list[TavilySearch] = []   # TAVILY_API_KEY가 없어도 다른 Agent는 뜨도록 처음 쓸 때 만든다
+
+    def tavily() -> TavilySearch:
+        if not _tavily:
+            _tavily.append(TavilySearch(max_results=RESULTS_PER_QUERY, search_depth="advanced"))
+        return _tavily[0]
+
+    planner = LLM(schema=ResearchPlan, primary_timeout=30)
+    summarizer = LLM(primary_timeout=30)
+    writer = LLM(primary_timeout=60)
+
+    async def load_cache(state: ResearchState) -> ResearchState:
+        cached = _one(await tools["get_cached_research"].ainvoke(
+            {"company_name": state["posting"]["company"], "max_age_days": CACHE_DAYS}))
+        return {"cached": [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]}
+
+    async def plan_queries(state: ResearchState) -> ResearchState:
+        need = [t for t in TOPIC_TITLES if t not in {c["topic"] for c in state["cached"]}]
+        plan = await planner.ainvoke(
+            "채용 지원자를 위한 기업분석 리서치 계획을 세워라. 아래 토픽마다 웹 검색어 2개를 만든다 "
+            "(한국 기업이면 한국어 검색어, 최신 동향을 위해 연도 포함 가능).\n"
+            + "\n".join(f"- {t}: {TOPIC_TITLES[t]}" for t in need)
+            + f"\n\n{_posting_brief(state['posting'])}")
+        plan.topics = [t for t in plan.topics if t.topic in need]
+        return {"plan": plan}
+
+    def fan_out(state: ResearchState):
+        sends = [Send("search_topic", {"posting": state["posting"], "plan": state["plan"],
+                                       "topic": t.topic, "queries": t.queries})
+                 for t in state["plan"].topics]
+        return sends or ["synthesize"]
+
+    async def search_topic(arg: dict) -> ResearchState:
+        topic = arg["topic"]
+        responses = await asyncio.gather(*(tavily().ainvoke({"query": q}) for q in arg["queries"]),
+                                         return_exceptions=True)
+        seen, sources = set(), []
+        for r in responses:
+            if isinstance(r, Exception) or not isinstance(r, dict):
+                continue
+            for item in r.get("results", []):
+                if item["url"] not in seen:
+                    seen.add(item["url"])
+                    sources.append({"title": item.get("title", ""), "url": item["url"],
+                                    "content": (item.get("content") or "")[:SNIPPET_LEN]})
+        if not sources:
+            return {"topics": [{"topic": topic, "summary": "검색 결과 없음 — 확인 불가", "sources": []}]}
+        plan = arg["plan"]
+        msg = await summarizer.ainvoke(
+            f"주제 '{TOPIC_TITLES[topic]}'에 대해 아래 검색 결과만 근거로 핵심을 한국어 bullet 5~8개로 요약하라. "
+            "각 bullet 끝에 근거 출처 번호를 [n]으로 단다. 검색 결과에 없는 내용은 쓰지 않는다. "
+            "수치·연도는 출처에 적힌 그대로.\n"
+            f"산업: {plan.industry} / 경쟁사: {', '.join(plan.competitors)}\n{_posting_brief(arg['posting'])}\n\n"
+            + "\n\n".join(f"[{i}] {s['title']} ({s['url']})\n{s['content']}" for i, s in enumerate(sources, 1)))
+        return {"topics": [{"topic": topic, "summary": msg.text,
+                            "sources": [{"title": s["title"], "url": s["url"]} for s in sources]}]}
+
+    async def synthesize(state: ResearchState) -> ResearchState:
+        p = state["posting"]
+        order = {t: i for i, t in enumerate(TOPIC_TITLES)}
+        topics = sorted(state["cached"] + state.get("topics", []), key=lambda t: order[t["topic"]])
+        # 토픽별 로컬 [n]을 전체 출처 번호로 바꾼다
+        all_sources, blocks = [], []
+        for t in topics:
+            base = len(all_sources)
+            all_sources.extend(t["sources"])
+            summary = re.sub(r"\[(\d+)\]",
+                             lambda m: f"[{base + int(m.group(1))}]" if 0 < int(m.group(1)) <= len(t["sources"])
+                             else "", t["summary"])
+            blocks.append(f"### {TOPIC_TITLES[t['topic']]}\n{summary}")
+        msg = await writer.ainvoke(
+            "너는 지원자를 돕는 기업분석 리서처다. 아래 토픽별 리서치 요약만 근거로 한국어 마크다운 리포트를 써라.\n"
+            "섹션: ## 산업 현황 / ## 산업 발전 방향 / ## 경쟁사 vs 해당 기업(경쟁사들이 하는 것과 이 회사가 하는 것을 "
+            "비교, 가능하면 표) / ## 이 직무로 회사에 기여할 수 있는 것(공고의 하는 일과 회사·산업 과제를 연결한 "
+            "구체적 아이디어 3~5개, 면접·자소서에서 쓸 수 있게) / ## 한 줄 요약.\n"
+            "모든 사실 문장에는 요약에 있는 출처 번호 [n]을 그대로 유지한다. 근거가 없으면 '확인 불가'라고 쓴다. "
+            "기여 아이디어는 근거를 바탕으로 한 제안임을 분명히 한다. 3500자 이내.\n\n"
+            f"{_posting_brief(p)}\n필수 역량: {(p.get('required_qualifications') or '-')[:600]}\n\n"
+            + "\n\n".join(blocks))
+        refs = "\n".join(f"[{i}] {s['title']} — {s['url']}" for i, s in enumerate(all_sources, 1))
+        report = f"{msg.text}\n\n## 출처\n{refs}"
+        await tools["save_research"].ainvoke({"company_name": p["company"], "posting_id": p.get("id"),
+                                              "topics": topics, "report_md": report})
+        cache_note = (f"\n\n_(회사 단위 토픽 {len(state['cached'])}개는 최근 {CACHE_DAYS}일 내 리서치를 재사용)_"
+                      if state["cached"] else "")
+        return {"report": report, "answer": report + cache_note}
+
+    g = StateGraph(ResearchState)
+    g.add_node("load_cache", load_cache)
+    g.add_node("plan_queries", plan_queries)
+    g.add_node("search_topic", search_topic)
+    g.add_node("synthesize", synthesize)
+    g.add_edge(START, "load_cache")
+    g.add_edge("load_cache", "plan_queries")
+    g.add_conditional_edges("plan_queries", fan_out, ["search_topic", "synthesize"])
+    g.add_edge("search_topic", "synthesize")
+    g.add_edge("synthesize", END)
+    return g.compile()

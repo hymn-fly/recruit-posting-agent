@@ -195,3 +195,25 @@ COMMENT ON TABLE  profile_summary IS '전체 프로필 문서를 LLM이 요약�
 COMMENT ON COLUMN profile_summary.id         IS '항상 1 (단일 행)';
 COMMENT ON COLUMN profile_summary.summary    IS '스킬·총 경력 연차·도메인·주요 프로젝트(성과 포함)·학력/자격 JSON';
 COMMENT ON COLUMN profile_summary.updated_at IS '마지막으로 다시 요약한 시각';
+
+-- ---------------------------------------------------------------
+-- 기업분석 Agent: 웹 리서치 결과 (회사 단위 토픽은 캐시로 재사용)
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS company_research (
+    id         SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    posting_id INTEGER REFERENCES job_postings(id) ON DELETE SET NULL,
+    topics     JSONB NOT NULL,
+    report_md  TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE  company_research IS '기업분석 Agent의 리서치 결과. 1회 분석이 1행';
+COMMENT ON COLUMN company_research.id         IS '고유 번호 (자동 증가)';
+COMMENT ON COLUMN company_research.company_id IS '분석 대상 회사 (companies.id 참조)';
+COMMENT ON COLUMN company_research.posting_id IS '분석 기준 공고 (job_postings.id 참조). 공고 삭제 시 NULL';
+COMMENT ON COLUMN company_research.topics     IS '토픽별 요약과 출처 [{topic, summary, sources:[{title,url}]}]. industry/outlook/competitors/company 토픽은 같은 회사 재분석 시 캐시로 재사용';
+COMMENT ON COLUMN company_research.report_md  IS '최종 리포트 (마크다운, [n] 출처 번호 포함)';
+COMMENT ON COLUMN company_research.created_at IS '분석 시각 (캐시 만료 판단 기준)';
+
+CREATE INDEX IF NOT EXISTS idx_company_research_company ON company_research(company_id, created_at DESC);

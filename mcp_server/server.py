@@ -1,4 +1,5 @@
 """커스텀 MCP 서버: 정해진 tool만 노출하며 임의 SQL은 실행하지 않는다."""
+import json
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -313,6 +314,37 @@ async def get_job_posting(id: int) -> dict:
     if r is None:
         raise ValueError(f"공고 없음: id={id}")
     return _row(r)
+
+
+@mcp.tool()
+async def get_cached_research(company_name: str, max_age_days: int = 14) -> dict:
+    """해당 회사의 가장 최근 리서치(max_age_days 이내). 없으면 빈 dict. topics의 회사 단위 토픽을 재사용한다."""
+    p = await pool()
+    async with p.acquire() as conn:
+        cid = await _company_id(conn, company_name)
+        r = await conn.fetchrow(
+            """SELECT id, posting_id, topics::text AS topics, report_md, created_at::text AS created_at
+               FROM company_research
+               WHERE company_id = $1 AND created_at > now() - make_interval(days => $2)
+               ORDER BY created_at DESC LIMIT 1""",
+            cid, int(max_age_days))
+    if r is None:
+        return {}
+    return {**dict(r), "topics": json.loads(r["topics"])}
+
+
+@mcp.tool()
+async def save_research(company_name: str, topics: list[dict], report_md: str,
+                        posting_id: Optional[int] = None) -> dict:
+    """리서치 결과 저장. topics: [{"topic", "summary", "sources": [{"title", "url"}]}]."""
+    p = await pool()
+    async with p.acquire() as conn:
+        cid = await _company_id(conn, company_name)
+        rid = await conn.fetchval(
+            """INSERT INTO company_research (company_id, posting_id, topics, report_md)
+               VALUES ($1, $2, $3::jsonb, $4) RETURNING id""",
+            cid, posting_id, json.dumps(topics, ensure_ascii=False), report_md)
+    return {"id": rid}
 
 
 @mcp.tool()

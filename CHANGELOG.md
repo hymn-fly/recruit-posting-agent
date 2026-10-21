@@ -146,7 +146,21 @@
   - `agents/profile_gap_graph.py` 신규: `load`(요약 없으면 적재 안내) → `decompose`(필수/우대 역량을 최대 12개 요구사항으로) → `match`(요구사항별 `search_profile` 병렬 + LLM 1회로 충족/부분/미충족 판정·원문 인용) → `synthesize`(강점/부족한 점/보완 방법 상위 4개/면접 질문 3개, 2500자 이내). 기업분석 리포트가 있으면 보완 방향에 반영.
   - `agents/state.py`: `ProfileSummary`, `Requirement(s)`, `Assessment(s)`, `ProfileGapState`. `.gitignore`: `data/`. `README.md`: 적재 방법·개인정보 주의.
 - **검증**: 가상 인물 테스트 자료(MD 이력서 + DOCX 포트폴리오)로 적재 → 요약 생성, 같은 파일 재적재 시 "변경 없음" 건너뜀. 긴 텍스트 청킹(12조각, 겹침 일치). MCP 도구 15개 로딩. 공고 id 149(SK AI Agent 개발자)로 분석 → 12개 요구사항 판정, "경력 5년 이상" 필수 미충족(4년)과 Kubernetes 부족을 정확히 짚었고 근거 인용은 원문과 일치. 첫 실행 124초(Gemma 타임아웃 30초 포함), 분량 제한을 추가한 뒤 섹션 구성만 다시 확인했다(소요 시간은 재측정하지 않음).
-- **테스트 데이터**: 가상 인물 자료는 P4 통합 테스트 뒤 삭제 예정.
+- **테스트 데이터**: 가상 인물 자료는 P4 통합 테스트 뒤 삭제했다(#17).
+
+### #17 기업분석 Agent + Supervisor 대화 CLI (Multi-Agent P3+P4)
+- **왜**: 공고를 고른 뒤 회사가 속한 산업의 현황과 발전 방향, 경쟁사 대비 회사의 행보, 직무로 기여할 수 있는 점을 출처와 함께 조사해야 한다. 또 3개 Agent를 대화 하나에서 이어 쓸 수 있어야 한다(공고 찾기 → 번호로 선택 → 분석).
+- **변경**
+  - `db/schema.sql` + **Neon 적용 완료**: `company_research`(회사·공고, 토픽별 요약·출처 JSONB, 리포트).
+  - `mcp_server/server.py`: `get_cached_research(company_name, max_age_days)`, `save_research` 신규.
+  - `agents/company_research_graph.py` 신규: `load_cache` → `plan_queries`(산업·경쟁사 파악, 토픽별 검색어 2개) → `search_topic`(LangGraph `Send`로 토픽별 병렬 Tavily, 토픽마다 [n] 출처 요약) → `synthesize`(출처 번호를 전체 번호로 다시 매긴 뒤 산업 현황/발전 방향/경쟁사 vs 해당 기업/직무 기여 아이디어/한 줄 요약 리포트와 출처 목록 작성, 저장). 회사 단위 4개 토픽은 14일 캐시를 재사용하고, 직무 토픽과 리포트는 매번 새로 만든다. Tavily 클라이언트는 처음 쓸 때 생성한다(키가 없어도 다른 Agent는 동작).
+  - `agents/supervisor.py` 신규: 구조화 라우터(`Route`: next/posting_number/posting_id/use_profile/reply/reason) → Agent 노드 → supervisor 복귀. 한 턴에 같은 Agent 1회, 최대 3개까지 실행. "2번 공고"는 추천 목록에서 찾아 `selected_posting`으로 정한다. 공고가 필요한데 선택되지 않았으면 되묻는다. 기업분석 리포트가 같은 공고 기준이면 gap 분석에 넘긴다. Agent마다 필요한 MCP 도구만 넘기고, Agent 실패는 메시지로 바꿔 대화가 끊기지 않게 했다. Route는 checkpointer 직렬화를 위해 dict로 저장한다.
+  - `agents/main_chat.py` 신규: REPL(`MemorySaver`, `/select N`, `/id ID`, `/reset`, `/quit`), 라우팅 이유 로그 출력.
+  - `agents/mcp_client.py`: `open_tools()` — 서버별 세션을 계속 열어 두는 컨텍스트 매니저(기존 `get_tools()`는 호출마다 서버 프로세스를 띄움).
+  - `agents/state.py`: `ResearchPlan`/`TopicQueries`/`ResearchState`, `Route`/`AppState`. `README.md`/`PLAN.md`: 사용법·체크리스트.
+- **검증**: 대화 4턴 — 인사 → FINISH 안내, "LLM 에이전트 개발 공고" → job_search 5건 후 FINISH, "2번 공고 기준 부족한 점" → id 149 선택 후 profile_gap, "기업분석" → company_research. `/id 154` 선택 후 기업분석 요청 시 키 안내 메시지. `get_cached_research`/`save_research` 저장·조회 후 테스트 행 삭제.
+- **미검증**: `TAVILY_API_KEY`가 없어 기업분석 리포트를 실제로 생성하지 못함(검색 → 요약 → 리포트, 캐시 적중).
+- **테스트 데이터 정리**: #16의 가상 인물 프로필(`test_resume.md`, `test_portfolio.docx`)과 요약을 삭제(`profile_*` 0행).
 
 ---
 
