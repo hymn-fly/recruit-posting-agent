@@ -4,7 +4,9 @@
 직무 토픽(role)과 최종 리포트는 공고마다 새로 만든다.
 """
 import asyncio
+import logging
 import re
+import json
 
 from langchain_tavily import TavilySearch
 from langgraph.graph import END, START, StateGraph
@@ -13,6 +15,8 @@ from langgraph.types import Send
 from agents.llm import LLM
 from agents.query_graph import _parse
 from agents.state import COMPANY_TOPICS, ResearchPlan, ResearchState
+
+log = logging.getLogger("agents.company_research_graph")
 
 CACHE_DAYS = 14
 RESULTS_PER_QUERY = 5
@@ -59,39 +63,58 @@ def make_graph(tools: dict):
             + "\n".join(f"- {t}: {TOPIC_TITLES[t]}" for t in TOPIC_TITLES)
             + f"\n\n{_posting_brief(state['posting'])}\n근무지: {state['posting'].get('location') or '-'}"
         )
+        log.info("plan_queries: 공고 id=%s [%s] %s\n  → 분석 대상 %s / 산업 %s / 경쟁사 %s\n%s",
+                 state["posting"].get("id"), state["posting"].get("company"), state["posting"].get("title"),
+                 plan.target_company, plan.industry, ", ".join(plan.competitors),
+                 "\n".join(f"    {t.topic}: {t.queries}" for t in plan.topics))
         return {"plan": plan}
 
     async def load_cache(state: ResearchState) -> ResearchState:
-        cached = get_one(await tools["get_cached_research"].ainvoke(
-            {"company_name": state["posting"]["company"], "target_company": state["plan"].target_company,
-             "max_age_days": CACHE_DAYS}))
-        
-        return {"cached": [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]}
+        cache_lookup_args = {"company_name": state["posting"]["company"],
+                             "target_company": state["plan"].target_company, "max_age_days": CACHE_DAYS}
+        cached = get_one(await tools["get_cached_research"].ainvoke(cache_lookup_args))
+
+        cached_company_topics = [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]
+        log.info("load_cache: %s → %s", cache_lookup_args,
+                 f"캐시 적중(research id={cached.get('id')}, {cached.get('created_at')}), 재사용 토픽 "
+                 f"{[t['topic'] for t in cached_company_topics]}" if cached else "캐시 없음")
+        return {"cached": cached_company_topics}
 
     def fan_out(state: ResearchState):
         done = {c["topic"] for c in state["cached"]}
         sends = [Send("search_topic", {"posting": state["posting"], "plan": state["plan"],
                                        "topic": t.topic, "queries": t.queries})
                  for t in state["plan"].topics if t.topic not in done]
+        log.info("fan_out: 검색할 토픽 %s", [s.arg["topic"] for s in sends] or "없음 → 바로 synthesize")
         return sends or ["synthesize"]
 
     async def search_topic(arg: dict) -> ResearchState:
-        topic = arg["topic"]
-        responses = await asyncio.gather(*(tavily().ainvoke({"query": q}) for q in arg["queries"]),
+        topic, queries = arg["topic"], arg["queries"]
+
+        # 1) 토픽의 검색어들을 Tavily에 동시에 보낸다 (하나가 실패해도 나머지는 쓴다)
+        responses = await asyncio.gather(*(tavily().ainvoke({"query": q}) for q in queries),
                                          return_exceptions=True)
-        
-        seen, sources = set(), []
-        for r in responses:
-            if isinstance(r, Exception) or not isinstance(r, dict):
+
+        # 2) 검색어별 응답을 확인하고, URL 중복을 빼며 출처를 모은다
+        seen_urls, sources = set(), []
+        for query, response in zip(queries, responses):
+            if isinstance(response, Exception):
+                log.warning(f"Query({query})에 대한 Tavily 응답 에러 발생 : {json.dumps(response)}")
                 continue
-            for item in r.get("results", []):
-                if item["url"] not in seen:
-                    seen.add(item["url"])
+            results = response.get("results", []) if isinstance(response, dict) else []
+            log.info("search_topic[%s]: %r → %d건 %s", topic, query, len(results),
+                     [r["url"] for r in results])
+            for item in results:
+                if item["url"] not in seen_urls:
+                    seen_urls.add(item["url"])
                     sources.append({"title": item.get("title", ""), "url": item["url"],
                                     "content": (item.get("content") or "")[:SNIPPET_LEN]})
+
         if not sources:
+            log.warning("search_topic[%s]: 사용할 검색 결과가 없어 '확인 불가'로 둔다", topic)
             return {"topics": [{"topic": topic, "summary": "검색 결과 없음 — 확인 불가", "sources": []}]}
-        
+
+        # 3) 모은 출처만 근거로 토픽 요약 ([n] 번호는 이 토픽 안에서의 번호)
         plan = arg["plan"]
         msg = await summarizer.ainvoke(
             f"주제 '{TOPIC_TITLES[topic]}'에 대해 아래 검색 결과만 근거로 핵심을 한국어 bullet 5~8개로 요약하라. "
@@ -100,7 +123,8 @@ def make_graph(tools: dict):
             f"분석 대상: {plan.target_company} / 산업: {plan.industry} / 경쟁사: {', '.join(plan.competitors)}\n"
             f"{_posting_brief(arg['posting'])}\n\n"
             + "\n\n".join(f"[{i}] {s['title']} ({s['url']})\n{s['content']}" for i, s in enumerate(sources, 1)))
-        
+        log.info("search_topic[%s]: 출처 %d개(중복 제거) → 요약 %d자", topic, len(sources), len(msg.text))
+
         return {"topics": [{"topic": topic, "summary": msg.text,
                             "sources": [{"title": s["title"], "url": s["url"]} for s in sources]}]}
 
@@ -133,8 +157,12 @@ def make_graph(tools: dict):
                          for i, s in enumerate(all_sources, 1) if i in cited)
         report = f"# {plan.target_company} 기업분석\n\n{msg.text}\n\n## 출처\n{refs}"
 
-        await tools["save_research"].ainvoke({"company_name": p["company"], "target_company": plan.target_company,
-                                              "posting_id": p.get("id"), "topics": topics, "report_md": report})
+        saved = get_one(await tools["save_research"].ainvoke(
+            {"company_name": p["company"], "target_company": plan.target_company,
+             "posting_id": p.get("id"), "topics": topics, "report_md": report}))
+        log.info("synthesize: 토픽 %d개(캐시 %d) / 출처 %d개 중 인용 %d개 / 리포트 %d자 → research id=%s 저장",
+                 len(topics), len(state["cached"]), len(all_sources), len(cited & set(range(1, len(all_sources) + 1))),
+                 len(report), saved.get("id"))
         cache_note = (f"\n\n_(회사 단위 토픽 {len(state['cached'])}개는 최근 {CACHE_DAYS}일 내 리서치를 재사용)_"
                       if state["cached"] else "")
         

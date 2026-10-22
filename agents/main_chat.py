@@ -21,7 +21,8 @@ from agents.query_graph import _parse  # noqa: E402
 from agents.supervisor import make_graph, turn_input  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="  [%(name)s] %(message)s")
-logging.getLogger("agents.supervisor").setLevel(logging.INFO)
+for logger_name in ("agents.supervisor", "agents.company_research_graph"):
+    logging.getLogger(logger_name).setLevel(logging.INFO)
 
 
 async def select(graph, config, tools, posting_id: int) -> str:
