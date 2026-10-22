@@ -2,6 +2,7 @@
 
 명령: /select N (추천 목록 N번 공고 선택) · /id ID (공고 id로 선택) · /reset (대화 초기화) · /quit
 """
+import os
 import asyncio
 import logging
 import sys
@@ -14,7 +15,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "recruit-agents"
+
+from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 
 from agents.mcp_client import open_tools, parse_mcp_tool_result  # noqa: E402
 from agents.graphs.supervisor import make_graph, turn_input  # noqa: E402
@@ -35,7 +39,7 @@ async def select(graph, config, tools, posting_id: int) -> str:
 
 async def main():
     async with open_tools() as tools:
-        graph = make_graph(tools, checkpointer=MemorySaver())
+        graph = make_graph(tools, checkpointer=InMemorySaver())
         config = {"configurable": {"thread_id": str(uuid.uuid4())}}
         print(__doc__)
         while True:

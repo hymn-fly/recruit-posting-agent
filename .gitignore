@@ -2,3 +2,4 @@
 __pycache__/
 .venv/
 data/
+openai_agents_tutorial.ipynb

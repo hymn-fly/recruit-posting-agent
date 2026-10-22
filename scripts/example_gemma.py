@@ -14,7 +14,7 @@ load_dotenv()
 
 from langchain_google_genai import ChatGoogleGenerativeAI  # noqa: E402
 
-MODEL = "gemma-4-31b-it"
+MODEL = "gemini-3.5-flash-lite" #"gemma-4-31b-it"
 DEFAULT_QUESTION = "한 문장으로 자기소개 해줘."
 
 

@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 
 log = logging.getLogger("agents.llm")
 
-PRIMARY_MODEL = "gemma-4-31b-it"   # GOOGLE_API_KEY 필요
+PRIMARY_MODEL = "gemini-3.5-flash-lite"   # GOOGLE_API_KEY 필요
 FALLBACK_MODEL = "gpt-6-luna"      # OPENAI_API_KEY 필요
 PRIMARY_TIMEOUT = 10               # 초. 이 시간 안에 응답이 없으면 FALLBACK_MODEL로 전환
 FALLBACK_RETRIES = 3
