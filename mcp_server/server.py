@@ -290,8 +290,11 @@ def score_posting_by_field_similarity(field_similarities: dict[str, Optional[flo
     field_similarities: 질의가 주어진 컬럼만 들어 있다. 예) {"sim_responsibilities": 0.78, "sim_required": None}
       값이 None이면 그 공고에 해당 본문이 없어 비교하지 못한 것이다.
     """
-    # TODO(human)
-    raise NotImplementedError
+    total_score = 0
+    for _, score in field_similarities.items():
+        if score:
+            total_score += score
+    return total_score
 
 
 @mcp.tool()
