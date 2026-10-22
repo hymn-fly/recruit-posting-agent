@@ -26,7 +26,6 @@ make-agents/
 | `profile_gap_graph.py` | **내 프로필 Agent**. `load` → `decompose`(요구사항 분해) → `match`(요구사항별 이력서 근거 검색·판정) → `synthesize`(강점/부족한 점/보완 방법) |
 | `main_chat.py` | 대화 CLI (`/select N`, `/id ID`, `/reset`, `/quit`) |
 | `query_graph.py` + `main_query.py` | 단발 질의 그래프. `search_jobs`(제목 키워드 + 하는 일/필수/우대 질의문별 임베딩 유사도)로 검색. 공용 `_parse()`(MCP 결과 정규화)도 여기 있음 |
-| `ingest_graph.py` + `main_ingest.py` | Python으로 직접 돌리는 적재 그래프. 현재 주 경로는 Claude Desktop 예약 작업이고 이것은 API 방식 대안 |
 
 ### `mcp_server/`: DB 접근 계층
 | 파일 | 역할 |

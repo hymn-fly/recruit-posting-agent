@@ -41,8 +41,10 @@ class LLM:
                  primary_timeout: float = PRIMARY_TIMEOUT):
         self.primary_name, self.fallback_name = primary, fallback
         self.primary_timeout = primary_timeout
+
         self._primary = make_chat(primary, max_output_tokens)
         self._fallback = make_chat(fallback, max_output_tokens)
+        
         if schema is not None:
             self._primary = self._primary.with_structured_output(schema)
             self._fallback = self._fallback.with_structured_output(schema)

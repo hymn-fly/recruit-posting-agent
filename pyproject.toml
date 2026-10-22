@@ -9,8 +9,6 @@ dependencies = [
     "mcp",
     "asyncpg",
     "python-dotenv",
-    "httpx",
-    "beautifulsoup4",
     "langchain-google-genai>=4.4.1",
     "langchain-openai>=1.7.0",
     "langchain-tavily>=0.2.18",

@@ -30,6 +30,7 @@
 - [ ] 일부 URL이 `...`로 잘려 있음 (현대자동차, BCG) — 실제 URL로 보완
 
 ### 4단계 — 적재 에이전트 (`agents/ingest_graph.py`)
+> 2026-10-22 삭제: 적재는 Claude Desktop 예약 작업 + `job-db` MCP 도구로 일원화(CHANGELOG #13, #24). 아래 체크리스트는 기록용.
 - [x] LangGraph: `fetch_page` → `extract_postings` → `save_postings` → `finish`
 - [x] `static_html`/`server_error`/`api_error`는 httpx+BeautifulSoup, 재시도 1회
 - [x] `robots_blocked`/`js_rendered`는 "unverifiable"로 기록 후 종료

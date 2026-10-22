@@ -1,3 +1,5 @@
 ## Conventions
-- 파이썬 패키지 관리용으로는 uv를 사용해. 가상환경도 uv 를 통해 만들고, 의존성 관리 pyproject.toml 로 관리해
-- 코드를 변경하는 작업지시를 받으면 `CHANGELOG.md`에 항목(무엇을/왜/변경 파일/검증)을 추가하고, 변경 내용을 목적별로 정리한 커밋 메시지(제목 + 본문)로 commit 후 `origin`(https://github.com/hymn-fly/recruit-posting-agent.git)에 push 해. `.env` 등 비밀 값은 절대 커밋하지 마
+- use uv for python package manager. make virtual env using uv, use pyproject.toml for dependency management.
+- when fixing the codes, add the change log(what/why/changed files/verify function) to `CHANGELOG.md`. Commit the changes with a commit message (subject + body) that groups the changes by purpose, then push to `origin`(https://github.com/hymn-fly/recruit-posting-agent.git). Never commit the secret files such as `.env`.
+- Use descriptive function names that state what the function does (e.g., `get_job_posting_by_id`, `transform_posting_to_summary_string`). variable name also should be descriptive.
+- When a function is longer than 10-15 lines, add comments and empty lines between its logical steps.

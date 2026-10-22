@@ -19,7 +19,7 @@ from mcp_server.embeddings import embed_documents, embed_query, text_hash, to_pg
 
 _pool: Optional[asyncpg.Pool] = None
 
-# AI Engineer 관련으로 적재하는 직군 (agents/state.py의 AiCategory와 동일)
+# AI Engineer 관련으로 적재하는 직군. 이 밖의 category는 upsert_job_posting이 거부한다
 ALLOWED_CATEGORIES = ("AI Engineer", "ML Engineer", "LLM Engineer", "MLOps", "Data")
 
 

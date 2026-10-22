@@ -217,6 +217,18 @@
 - **검증**: `uv run pytest` → 13 passed, 5 skipped(integration). 일부러 코드를 깨는 mutation 3건(출처 필터 제거, Supervisor 재실행 방지 제거, 없는 id 필터 제거) → 해당 테스트 3개가 정확히 실패했고, 원복 후 통과. `--run-integration` → 4 passed, 1 skipped(프로필 자료 없음), 153초.
 - **DB 영향**: integration의 기업분석 테스트가 `company_research`에 리서치 1행을 저장했다(실제 데이터, 캐시로 사용).
 
+### #24 쓰이지 않는 Python 적재 그래프(`ingest_graph.py`, `main_ingest.py`) 삭제
+- **왜**: #13 이후 적재는 Claude Desktop 예약 작업이 `job-db` MCP 도구를 직접 호출한다. 두 파일은 서로만 참조했고, 그 사이 추가된 기능(#14 걸러낸 공고 기록, #15/#20 임베딩, 기존 URL JD 재파싱 생략)이 빠져 있어 실행하면 주 경로와 다른 결과(예: RAG 검색에 안 잡히는 공고)를 냈다.
+- **변경**
+  - 삭제: `agents/ingest_graph.py`, `agents/main_ingest.py`
+  - `agents/state.py`: 적재 그래프 전용 `AiCategory`, `JobPostingDraft`, `ExtractionResult`, `JDDetail`, `IngestState` 삭제
+  - `pyproject.toml`: `httpx`, `beautifulsoup4` 제거(적재 그래프에서만 직접 사용)
+  - `mcp_server/server.py`: `ALLOWED_CATEGORIES` 주석에서 `AiCategory` 참조 제거
+  - `README.md`: 파일 표에서 행 삭제. `PLAN.md`: 4단계에 삭제 메모(체크리스트는 기록용으로 유지)
+  - 유지: `scrapers/companies.py`(`scripts/seed_companies.py`가 사용)
+- **검증**: `git grep`으로 남은 참조 없음 확인, 전체 `py_compile` 통과, `uv run pytest` 13 passed.
+- **복구**: 필요하면 이 커밋의 부모에서 `git checkout <commit>^ -- agents/ingest_graph.py agents/main_ingest.py`.
+
 ---
 
 ## 미해결 / 다음 후보

@@ -4,7 +4,6 @@
 직무 토픽(role)과 최종 리포트는 공고마다 새로 만든다.
 """
 import asyncio
-import json
 import re
 
 from langchain_tavily import TavilySearch
@@ -28,7 +27,7 @@ TOPIC_TITLES = {
 }
 
 
-def _one(raw) -> dict:
+def get_one(raw) -> dict:
     items = _parse(raw)
     return items[0] if items else {}
 
@@ -58,13 +57,15 @@ def make_graph(tools: dict):
             "산업·경쟁사·검색어는 모두 그 계열사 기준으로 만든다. 아래 토픽마다 웹 검색어 2개를 만든다 "
             "(한국 기업이면 한국어 검색어, 최신 동향을 위해 연도 포함 가능).\n"
             + "\n".join(f"- {t}: {TOPIC_TITLES[t]}" for t in TOPIC_TITLES)
-            + f"\n\n{_posting_brief(state['posting'])}\n근무지: {state['posting'].get('location') or '-'}")
+            + f"\n\n{_posting_brief(state['posting'])}\n근무지: {state['posting'].get('location') or '-'}"
+        )
         return {"plan": plan}
 
     async def load_cache(state: ResearchState) -> ResearchState:
-        cached = _one(await tools["get_cached_research"].ainvoke(
+        cached = get_one(await tools["get_cached_research"].ainvoke(
             {"company_name": state["posting"]["company"], "target_company": state["plan"].target_company,
              "max_age_days": CACHE_DAYS}))
+        
         return {"cached": [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]}
 
     def fan_out(state: ResearchState):
@@ -78,6 +79,7 @@ def make_graph(tools: dict):
         topic = arg["topic"]
         responses = await asyncio.gather(*(tavily().ainvoke({"query": q}) for q in arg["queries"]),
                                          return_exceptions=True)
+        
         seen, sources = set(), []
         for r in responses:
             if isinstance(r, Exception) or not isinstance(r, dict):
@@ -89,6 +91,7 @@ def make_graph(tools: dict):
                                     "content": (item.get("content") or "")[:SNIPPET_LEN]})
         if not sources:
             return {"topics": [{"topic": topic, "summary": "검색 결과 없음 — 확인 불가", "sources": []}]}
+        
         plan = arg["plan"]
         msg = await summarizer.ainvoke(
             f"주제 '{TOPIC_TITLES[topic]}'에 대해 아래 검색 결과만 근거로 핵심을 한국어 bullet 5~8개로 요약하라. "
@@ -97,6 +100,7 @@ def make_graph(tools: dict):
             f"분석 대상: {plan.target_company} / 산업: {plan.industry} / 경쟁사: {', '.join(plan.competitors)}\n"
             f"{_posting_brief(arg['posting'])}\n\n"
             + "\n\n".join(f"[{i}] {s['title']} ({s['url']})\n{s['content']}" for i, s in enumerate(sources, 1)))
+        
         return {"topics": [{"topic": topic, "summary": msg.text,
                             "sources": [{"title": s["title"], "url": s["url"]} for s in sources]}]}
 
@@ -113,6 +117,7 @@ def make_graph(tools: dict):
                              lambda m: f"[{base + int(m.group(1))}]" if 0 < int(m.group(1)) <= len(t["sources"])
                              else "", t["summary"])
             blocks.append(f"### {TOPIC_TITLES[t['topic']]}\n{summary}")
+
         msg = await writer.ainvoke(
             "너는 지원자를 돕는 기업분석 리서처다. 아래 토픽별 리서치 요약만 근거로 한국어 마크다운 리포트를 써라.\n"
             "섹션: ## 산업 현황 / ## 산업 발전 방향 / ## 경쟁사 vs 해당 기업(경쟁사들이 하는 것과 이 회사가 하는 것을 "
@@ -127,10 +132,12 @@ def make_graph(tools: dict):
         refs = "\n".join(f"[{i}] {s['title']} — {s['url']}"
                          for i, s in enumerate(all_sources, 1) if i in cited)
         report = f"# {plan.target_company} 기업분석\n\n{msg.text}\n\n## 출처\n{refs}"
+
         await tools["save_research"].ainvoke({"company_name": p["company"], "target_company": plan.target_company,
                                               "posting_id": p.get("id"), "topics": topics, "report_md": report})
         cache_note = (f"\n\n_(회사 단위 토픽 {len(state['cached'])}개는 최근 {CACHE_DAYS}일 내 리서치를 재사용)_"
                       if state["cached"] else "")
+        
         return {"report": report, "answer": report + cache_note}
 
     g = StateGraph(ResearchState)
