@@ -229,6 +229,23 @@
 - **검증**: `git grep`으로 남은 참조 없음 확인, 전체 `py_compile` 통과, `uv run pytest` 13 passed.
 - **복구**: 필요하면 이 커밋의 부모에서 `git checkout <commit>^ -- agents/ingest_graph.py agents/main_ingest.py`.
 
+### #25 Agent 그래프를 `agents/graphs/`로 분리 + Tavily 실패 로그 버그 수정
+- **왜**
+  - 조립 코드(Supervisor·CLI·공용 모듈)와 Agent별 그래프가 한 폴더에 섞여 있었다.
+  - ca00288(그래프 진행 로그 추가)의 Tavily 실패 로그가 `json.dumps(예외객체)`를 호출해, Tavily가 실패하면 로그 줄에서 `TypeError`가 나 토픽 노드 전체가 죽었다(`return_exceptions=True`로 한 검색어 실패를 견디려던 의도와 반대).
+- **변경**
+  - 이동(`git mv`): `agents/{job_search,company_research,profile_gap,query}_graph.py` → `agents/graphs/`. `agents/`에는 `supervisor.py`, `main_chat.py`, `main_query.py`, `state.py`, `llm.py`, `mcp_client.py`가 남는다.
+  - `agents/mcp_client.py`: `query_graph._parse` → `parse_mcp_tool_result`로 옮김(그래프가 graphs/로 가면 Supervisor·CLI가 그래프 모듈에서 유틸을 가져오는 역방향 의존이 생기므로). 4곳에 중복돼 있던 `_one`/`get_one`을 `get_first_mcp_result` 하나로 통합.
+  - 로거 이름을 `logging.getLogger(__name__)`(`agents.graphs.*`)로 통일하고 `main_chat.py`/`main_query.py`의 레벨 설정도 맞췄다.
+  - `agents/graphs/company_research_graph.py`: Tavily 실패 로그를 `log.warning("search_topic[%s]: Tavily 호출 실패 %r — %s: %s", topic, query, 타입명, 메시지[:200])`로 교체, 안 쓰는 `json` import 제거.
+  - `tests/`: import 경로·monkeypatch 대상 갱신. 단위 테스트 추가 — 검색어 하나가 실패해도 나머지 결과로 요약하고 경고 로그를 남기는지.
+  - `README.md`: 폴더 트리와 파일 표를 `agents/`(조립·공용) / `agents/graphs/`(Agent별)로 분리, 구성도 라벨 경로 갱신.
+- **검증**
+  - 새 단위 테스트가 수정 전 코드에서 같은 `TypeError`로 실패, 수정 후 통과. `uv run pytest` 14 passed.
+  - `ruff --select F401,F811,F821`: 이동 후 `query_graph.py`가 `parse_mcp_tool_result`를 import하지 않은 `NameError` 버그를 찾아 수정(단위 테스트에 query_graph가 없어 테스트로는 안 잡혔다). 안 쓰는 import 3개 제거.
+  - `main_query.py` 실행: 파라미터 → 호출 인자 → 결과 → 답변 로그 출력. `main_chat.py`로 공고 154 기업분석: 계열사 판별 → 캐시 적중(토픽 4개 재사용) → role만 Tavily 검색 → research id=7 저장까지 로그 확인.
+- **남은 것**: `query_graph` 단위 테스트 없음.
+
 ---
 
 ## 미해결 / 다음 후보

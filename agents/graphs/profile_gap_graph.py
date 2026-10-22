@@ -5,17 +5,13 @@ import json
 from langgraph.graph import END, START, StateGraph
 
 from agents.llm import LLM
-from agents.query_graph import _parse
+from agents.mcp_client import get_first_mcp_result, parse_mcp_tool_result
 from agents.state import Assessments, ProfileGapState, Requirements
 
 EVIDENCE_K = 3   # 요구사항마다 가져올 프로필 원문 조각 수
 NO_PROFILE = ("적재된 프로필 자료가 없습니다. 먼저 이력서/경력기술서/포트폴리오를 넣어주세요:\n"
               "  uv run python scripts/ingest_profile.py data/profile/resume.pdf --kind resume")
 
-
-def _one(raw) -> dict:
-    items = _parse(raw)
-    return items[0] if items else {}
 
 
 def make_graph(tools: dict):
@@ -24,7 +20,7 @@ def make_graph(tools: dict):
     writer = LLM(primary_timeout=60)
 
     async def load(state: ProfileGapState) -> ProfileGapState:
-        return {"summary": _one(await tools["get_profile_summary"].ainvoke({}))}
+        return {"summary": get_first_mcp_result(await tools["get_profile_summary"].ainvoke({}))}
 
     def route_after_load(state: ProfileGapState) -> str:
         return "decompose" if state["summary"] else "no_profile"
@@ -46,7 +42,7 @@ def make_graph(tools: dict):
         results = await asyncio.gather(*(
             tools["search_profile"].ainvoke({"query": r.text, "limit": EVIDENCE_K})
             for r in state["requirements"]))
-        evidence = [_parse(r) for r in results]
+        evidence = [parse_mcp_tool_result(r) for r in results]
         blocks = []
         for i, (req, ev) in enumerate(zip(state["requirements"], evidence)):
             chunks = "\n".join(f"  - ({e['filename']}) {e['text']}" for e in ev)

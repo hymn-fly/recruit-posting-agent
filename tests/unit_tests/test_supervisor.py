@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
-from agents import company_research_graph, job_search_graph, profile_gap_graph, supervisor
+from agents import supervisor
+from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph
 from agents.state import Route
 
 ALL_TOOLS = ("semantic_search_jobs", "get_cached_research", "save_research",

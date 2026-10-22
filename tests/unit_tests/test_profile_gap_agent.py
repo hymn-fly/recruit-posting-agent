@@ -1,5 +1,5 @@
-"""내 프로필 Agent(agents/profile_gap_graph.py) 단위 테스트."""
-from agents import profile_gap_graph
+"""내 프로필 Agent(agents/graphs/profile_gap_graph.py) 단위 테스트."""
+from agents.graphs import profile_gap_graph
 from agents.state import Assessment, Assessments, Requirement, Requirements
 
 SUMMARY = {"headline": "백엔드 4년", "total_years": 4, "skills": ["Python"], "domains": [],

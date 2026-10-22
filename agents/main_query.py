@@ -12,10 +12,10 @@ load_dotenv()
 
 # 다른 라이브러리 로그는 WARNING 이상만, 질의 그래프는 파라미터·결과까지(INFO) 본다
 logging.basicConfig(level=logging.WARNING, format="  [%(name)s] %(message)s")
-logging.getLogger("agents.query_graph").setLevel(logging.INFO)
+logging.getLogger("agents.graphs.query_graph").setLevel(logging.INFO)
 
 from agents.mcp_client import get_tools  # noqa: E402
-from agents.query_graph import make_graph  # noqa: E402
+from agents.graphs.query_graph import make_graph  # noqa: E402
 
 
 async def main(question: str, profile: str = ""):

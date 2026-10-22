@@ -1,5 +1,5 @@
-"""채용공고 조회 Agent(agents/job_search_graph.py) 단위 테스트."""
-from agents import job_search_graph
+"""채용공고 조회 Agent(agents/graphs/job_search_graph.py) 단위 테스트."""
+from agents.graphs import job_search_graph
 from agents.state import JobSearchPlan, Pick, Ranking
 
 

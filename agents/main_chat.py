@@ -16,17 +16,16 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 
-from agents.mcp_client import open_tools  # noqa: E402
-from agents.query_graph import _parse  # noqa: E402
+from agents.mcp_client import open_tools, parse_mcp_tool_result  # noqa: E402
 from agents.supervisor import make_graph, turn_input  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="  [%(name)s] %(message)s")
-for logger_name in ("agents.supervisor", "agents.company_research_graph"):
+for logger_name in ("agents.supervisor", "agents.graphs.company_research_graph"):
     logging.getLogger(logger_name).setLevel(logging.INFO)
 
 
 async def select(graph, config, tools, posting_id: int) -> str:
-    items = _parse(await tools["get_job_posting"].ainvoke({"id": posting_id}))
+    items = parse_mcp_tool_result(await tools["get_job_posting"].ainvoke({"id": posting_id}))
     if not items:
         return f"공고 id={posting_id}를 찾지 못했습니다."
     await graph.aupdate_state(config, {"selected_posting": items[0]})

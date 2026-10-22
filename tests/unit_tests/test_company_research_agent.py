@@ -1,7 +1,7 @@
-"""기업분석 Agent(agents/company_research_graph.py) 단위 테스트. Tavily도 가짜로 바꾼다."""
+"""기업분석 Agent(agents/graphs/company_research_graph.py) 단위 테스트. Tavily도 가짜로 바꾼다."""
 import pytest
 
-from agents import company_research_graph
+from agents.graphs import company_research_graph
 from agents.state import ResearchPlan, TopicQueries
 
 
@@ -47,6 +47,28 @@ async def test_캐시가_없으면_5개_토픽을_검색하고_출처를_전체_
     assert [r.split("]")[0] for r in refs] == ["[1", "[3"]   # 인용된 출처만
     saved = tools["save_research"].calls[0]
     assert saved["target_company"] == "티맵모빌리티" and saved["posting_id"] == 154
+
+
+async def test_Tavily_검색어_하나가_실패해도_나머지_결과로_요약하고_경고를_남긴다(
+        fake_llm, make_tools, make_posting, fake_tavily, monkeypatch, caplog):
+    async def fail_on_first_query(self, args):
+        if args["query"].endswith("-q1"):
+            raise RuntimeError("quota exceeded")
+        return {"results": [{"title": "기사", "url": f"https://news/{args['query']}", "content": "본문"}]}
+
+    monkeypatch.setattr(fake_tavily, "ainvoke", fail_on_first_query)
+    plan = _plan()
+    for t in plan.topics:
+        t.queries = [f"{t.topic}-q1", f"{t.topic}-q2"]
+    tools = make_tools(get_cached_research={}, save_research={"id": 3})
+    fake_llm.set(ResearchPlan, plan)
+    fake_llm.set(None, lambda prompt: "요약 [1]" if "bullet" in prompt else "리포트 [1]")
+
+    out = await company_research_graph.make_graph(tools).ainvoke({"posting": make_posting(id=154)})
+
+    assert all(t["sources"] == [{"title": "기사", "url": f"https://news/{t['topic']}-q2"}] for t in out["topics"])
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("Tavily 호출 실패 'industry-q1' — RuntimeError: quota exceeded" in w for w in warnings)
 
 
 async def test_회사_단위_토픽이_캐시에_있으면_role만_검색한다(fake_llm, make_tools, make_posting, fake_tavily):

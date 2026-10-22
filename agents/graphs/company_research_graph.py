@@ -6,17 +6,16 @@
 import asyncio
 import logging
 import re
-import json
 
 from langchain_tavily import TavilySearch
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from agents.llm import LLM
-from agents.query_graph import _parse
+from agents.mcp_client import get_first_mcp_result
 from agents.state import COMPANY_TOPICS, ResearchPlan, ResearchState
 
-log = logging.getLogger("agents.company_research_graph")
+log = logging.getLogger(__name__)
 
 CACHE_DAYS = 14
 RESULTS_PER_QUERY = 5
@@ -30,10 +29,6 @@ TOPIC_TITLES = {
     "role": "직무 관련 기술·업무 동향",
 }
 
-
-def get_one(raw) -> dict:
-    items = _parse(raw)
-    return items[0] if items else {}
 
 
 def _posting_brief(p: dict) -> str:
@@ -72,7 +67,7 @@ def make_graph(tools: dict):
     async def load_cache(state: ResearchState) -> ResearchState:
         cache_lookup_args = {"company_name": state["posting"]["company"],
                              "target_company": state["plan"].target_company, "max_age_days": CACHE_DAYS}
-        cached = get_one(await tools["get_cached_research"].ainvoke(cache_lookup_args))
+        cached = get_first_mcp_result(await tools["get_cached_research"].ainvoke(cache_lookup_args))
 
         cached_company_topics = [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]
         log.info("load_cache: %s → %s", cache_lookup_args,
@@ -99,7 +94,9 @@ def make_graph(tools: dict):
         seen_urls, sources = set(), []
         for query, response in zip(queries, responses):
             if isinstance(response, Exception):
-                log.warning(f"Query({query})에 대한 Tavily 응답 에러 발생 : {json.dumps(response)}")
+                # 예외 객체는 JSON 직렬화가 안 되므로 타입명과 메시지만 남긴다 (로그 코드가 다시 예외를 내면 토픽 전체가 실패)
+                log.warning("search_topic[%s]: Tavily 호출 실패 %r — %s: %s",
+                            topic, query, type(response).__name__, str(response)[:200])
                 continue
             results = response.get("results", []) if isinstance(response, dict) else []
             log.info("search_topic[%s]: %r → %d건 %s", topic, query, len(results),
@@ -157,7 +154,7 @@ def make_graph(tools: dict):
                          for i, s in enumerate(all_sources, 1) if i in cited)
         report = f"# {plan.target_company} 기업분석\n\n{msg.text}\n\n## 출처\n{refs}"
 
-        saved = get_one(await tools["save_research"].ainvoke(
+        saved = get_first_mcp_result(await tools["save_research"].ainvoke(
             {"company_name": p["company"], "target_company": plan.target_company,
              "posting_id": p.get("id"), "topics": topics, "report_md": report}))
         log.info("synthesize: 토픽 %d개(캐시 %d) / 출처 %d개 중 인용 %d개 / 리포트 %d자 → research id=%s 저장",

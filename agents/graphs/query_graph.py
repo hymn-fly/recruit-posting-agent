@@ -1,6 +1,6 @@
 """질의 에이전트: plan_search -> run_search -> synthesize_answer.
 
-로그(INFO, logger "agents.query_graph"): 질문이 어떤 검색 파라미터로 변환됐는지, search_jobs에 어떤 인자로 호출해
+로그(INFO, logger "agents.graphs.query_graph"): 질문이 어떤 검색 파라미터로 변환됐는지, search_jobs에 어떤 인자로 호출해
 어떤 공고가 돌아왔는지(id·회사·제목·유사도), 답변 길이를 남긴다.
 """
 import json
@@ -9,9 +9,10 @@ import logging
 from langgraph.graph import END, START, StateGraph
 
 from agents.llm import LLM
+from agents.mcp_client import parse_mcp_tool_result
 from agents.state import QueryState, SearchParams
 
-log = logging.getLogger("agents.query_graph")
+log = logging.getLogger(__name__)
 
 
 def format_similarity_for_log(value) -> str:
@@ -31,27 +32,6 @@ def format_search_rows_for_log(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _parse(raw) -> list[dict]:
-    """MCP tool 결과(list[dict], JSON 문자열, text content block)를 list[dict]로 정규화."""
-    if isinstance(raw, tuple):
-        raw = raw[0]
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            return []
-    out: list[dict] = []
-    if isinstance(raw, list):
-        for item in raw:
-            if isinstance(item, dict) and item.get("type") == "text":
-                try:
-                    v = json.loads(item["text"])
-                except json.JSONDecodeError:
-                    continue
-                out.extend(v if isinstance(v, list) else [v])
-            elif isinstance(item, dict):
-                out.append(item)
-    return out
 
 
 def make_graph(tools: dict):
@@ -78,7 +58,7 @@ def make_graph(tools: dict):
         log.info("run_search: search_jobs 호출 인자 %s", json.dumps(search_jobs_args, ensure_ascii=False))
 
         raw = await tools["search_jobs"].ainvoke(search_jobs_args)
-        results = _parse(raw)
+        results = parse_mcp_tool_result(raw)
         log.info("run_search: search_jobs 결과 %d건%s", len(results),
                  "\n" + format_search_rows_for_log(results) if results else "")
         return {"results": results}

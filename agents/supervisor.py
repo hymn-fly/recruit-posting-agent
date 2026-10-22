@@ -9,9 +9,9 @@ import os
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
-from agents import company_research_graph, job_search_graph, profile_gap_graph
+from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph
 from agents.llm import LLM
-from agents.query_graph import _parse
+from agents.mcp_client import get_first_mcp_result
 from agents.state import AppState, Route
 
 log = logging.getLogger("agents.supervisor")
@@ -28,10 +28,6 @@ AGENT_TOOLS = {
     "profile_gap": ("get_profile_summary", "search_profile"),
 }
 
-
-def _one(raw) -> dict:
-    items = _parse(raw)
-    return items[0] if items else {}
 
 
 def _last_user(state: AppState) -> str:
@@ -84,10 +80,10 @@ def make_graph(tools: dict, checkpointer=None):
             posting = None
             cands_list = state.get("candidates") or []
             if route.posting_number and 1 <= route.posting_number <= len(cands_list):
-                posting = _one(await tools["get_job_posting"].ainvoke({"id": cands_list[route.posting_number - 1]["id"]}))
+                posting = get_first_mcp_result(await tools["get_job_posting"].ainvoke({"id": cands_list[route.posting_number - 1]["id"]}))
             elif route.posting_id:
                 try:
-                    posting = _one(await tools["get_job_posting"].ainvoke({"id": route.posting_id}))
+                    posting = get_first_mcp_result(await tools["get_job_posting"].ainvoke({"id": route.posting_id}))
                 except Exception:
                     posting = None
             if posting:
@@ -105,7 +101,7 @@ def make_graph(tools: dict, checkpointer=None):
     async def run_job_search(state: AppState) -> AppState:
         profile = ""
         if state["route"]["use_profile"]:
-            profile = _profile_brief(_one(await tools["get_profile_summary"].ainvoke({})))
+            profile = _profile_brief(get_first_mcp_result(await tools["get_profile_summary"].ainvoke({})))
         try:
             res = await job_graph.ainvoke({"question": _last_user(state), "profile": profile})
         except Exception as e:

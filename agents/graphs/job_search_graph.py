@@ -4,7 +4,7 @@ import json
 from langgraph.graph import END, START, StateGraph
 
 from agents.llm import LLM
-from agents.query_graph import _parse
+from agents.mcp_client import parse_mcp_tool_result
 from agents.state import JobSearchPlan, JobSearchState, Ranking
 
 TOP_K = 20
@@ -44,7 +44,7 @@ def make_graph(tools: dict):
     async def retrieve(state: JobSearchState) -> JobSearchState:
         args = {k: v for k, v in state["plan"].model_dump().items() if v is not None}
         raw = await tools["semantic_search_jobs"].ainvoke({**args, "limit": TOP_K})
-        return {"results": _parse(raw)}
+        return {"results": parse_mcp_tool_result(raw)}
 
     async def rerank_explain(state: JobSearchState) -> JobSearchState:
         if not state["results"]:

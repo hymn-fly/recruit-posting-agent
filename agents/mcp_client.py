@@ -1,3 +1,4 @@
+import json
 import sys
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -39,3 +40,32 @@ async def open_tools():
             session = await stack.enter_async_context(client.session(name))
             tools.update({t.name: t for t in await load_mcp_tools(session)})
         yield tools
+
+
+def parse_mcp_tool_result(raw) -> list[dict]:
+    """MCP tool 결과(list[dict], JSON 문자열, text content block)를 list[dict]로 정규화."""
+    if isinstance(raw, tuple):
+        raw = raw[0]
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    out: list[dict] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and item.get("type") == "text":
+                try:
+                    v = json.loads(item["text"])
+                except json.JSONDecodeError:
+                    continue
+                out.extend(v if isinstance(v, list) else [v])
+            elif isinstance(item, dict):
+                out.append(item)
+    return out
+
+
+def get_first_mcp_result(raw) -> dict:
+    """MCP 도구 결과에서 첫 항목 하나만 꺼낸다 (단건 조회용). 없으면 빈 dict."""
+    items = parse_mcp_tool_result(raw)
+    return items[0] if items else {}

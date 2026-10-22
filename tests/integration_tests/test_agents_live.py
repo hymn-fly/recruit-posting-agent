@@ -6,9 +6,9 @@
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
-from agents import company_research_graph, job_search_graph, profile_gap_graph, supervisor
-from agents.mcp_client import open_tools
-from agents.query_graph import _parse
+from agents import supervisor
+from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph
+from agents.mcp_client import open_tools, parse_mcp_tool_result
 from tests.integration_tests.conftest import pick_posting, profile_summary, require_env
 
 pytestmark = pytest.mark.integration
@@ -16,7 +16,7 @@ pytestmark = pytest.mark.integration
 
 async def test_MCP_semantic_search_jobs는_컬럼별_유사도를_돌려준다():
     async with open_tools() as tools:
-        rows = _parse(await tools["semantic_search_jobs"].ainvoke(
+        rows = parse_mcp_tool_result(await tools["semantic_search_jobs"].ainvoke(
             {"query": "Kubernetes 운영과 모델 서빙 경험", "limit": 5}))
     assert rows, "검색 결과 없음"
     assert {"id", "similarity", "sim_responsibilities", "sim_required", "sim_preferred"} <= rows[0].keys()

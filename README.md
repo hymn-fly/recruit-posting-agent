@@ -4,7 +4,8 @@
 ## 폴더 구조
 ```
 make-agents/
-├── agents/          # LangGraph 에이전트 (그래프·상태·LLM·MCP 연결)
+├── agents/          # 조립·공용: Supervisor, 진입점(CLI), 상태, LLM, MCP 연결
+│   └── graphs/      # Agent별 LangGraph 그래프 (채용공고 조회 / 기업분석 / 내 프로필 / 단발 질의)
 ├── mcp_server/      # DB 접근 계층: MCP 서버 2개 + 임베딩
 ├── db/              # Postgres 스키마
 ├── scripts/         # 1회성/관리용 CLI
@@ -14,18 +15,23 @@ make-agents/
 └── README.md, PLAN.md, CHANGELOG.md, pyproject.toml, uv.lock, .env.example
 ```
 
-### `agents/`: 에이전트
+### `agents/`: 조립·공용 코드
 | 파일 | 역할 |
 |---|---|
-| `state.py` | 모든 그래프의 상태(TypedDict)와 LLM 구조화 출력 스키마(pydantic). 적재용 / Agent별 / Supervisor용 섹션으로 나뉨 |
+| `state.py` | 모든 그래프의 상태(TypedDict)와 LLM 구조화 출력 스키마(pydantic). 질의 / Agent별 / Supervisor용 섹션으로 나뉨 |
 | `llm.py` | LLM 공용 래퍼 `LLM`. 기본 Gemma → 시간 초과·에러 시 `gpt-6-luna` 폴백, 실패하면 5분간 Gemma를 건너뛰는 서킷 브레이커. `schema=`면 구조화 출력 |
-| `mcp_client.py` | MCP 서버 2개 연결. `get_tools()`(호출마다 서버 기동, 단발 실행용) / `open_tools()`(세션 유지, REPL·테스트용) |
+| `mcp_client.py` | MCP 서버 2개 연결. `get_tools()`(호출마다 서버 기동, 단발 실행용) / `open_tools()`(세션 유지, REPL·테스트용). MCP 결과 정규화 `parse_mcp_tool_result()` / 단건 `get_first_mcp_result()` |
 | `supervisor.py` | **Supervisor**. 라우터 LLM이 다음 Agent를 고르고, "2번 공고"를 추천 목록에서 찾아 선택. 한 턴 최대 3개 Agent, Agent별 MCP 도구 제한 |
+| `main_chat.py` | 대화 CLI (`/select N`, `/id ID`, `/reset`, `/quit`) |
+| `main_query.py` | 단발 질의 CLI (`graphs/query_graph.py` 실행, 파라미터·결과 로그 출력) |
+
+### `agents/graphs/`: Agent별 그래프
+| 파일 | 역할 |
+|---|---|
 | `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(검색문·필터) → `retrieve`(`semantic_search_jobs` 상위 20건) → `rerank_explain`(LLM이 5건 선택·근거) |
 | `company_research_graph.py` | **기업분석 Agent**. `plan_queries`(실제 계열사·산업·경쟁사, 토픽별 검색어) → `load_cache`(14일) → `search_topic`×N(Tavily 병렬) → `synthesize`(리포트·출처) |
 | `profile_gap_graph.py` | **내 프로필 Agent**. `load` → `decompose`(요구사항 분해) → `match`(요구사항별 이력서 근거 검색·판정) → `synthesize`(강점/부족한 점/보완 방법) |
-| `main_chat.py` | 대화 CLI (`/select N`, `/id ID`, `/reset`, `/quit`) |
-| `query_graph.py` + `main_query.py` | 단발 질의 그래프. `search_jobs`(제목 키워드 + 하는 일/필수/우대 질의문별 임베딩 유사도)로 검색. 공용 `_parse()`(MCP 결과 정규화)도 여기 있음 |
+| `query_graph.py` | 단발 질의 그래프. `search_jobs`(제목 키워드 + 하는 일/필수/우대 질의문별 임베딩 유사도)로 검색 |
 
 ### `mcp_server/`: DB 접근 계층
 | 파일 | 역할 |
@@ -81,9 +87,9 @@ flowchart LR
 
     subgraph Chat["대화 (agents/main_chat.py)"]
         U(("사용자")) --> SV["Supervisor<br/>agents/supervisor.py"]
-        SV --> JS["채용공고 조회 Agent<br/>job_search_graph.py"]
-        SV --> CR["기업분석 Agent<br/>company_research_graph.py"]
-        SV --> PG["내 프로필 Agent<br/>profile_gap_graph.py"]
+        SV --> JS["채용공고 조회 Agent<br/>graphs/job_search_graph.py"]
+        SV --> CR["기업분석 Agent<br/>graphs/company_research_graph.py"]
+        SV --> PG["내 프로필 Agent<br/>graphs/profile_gap_graph.py"]
     end
 
     subgraph MCP["MCP 서버 (mcp_server/)"]

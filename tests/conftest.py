@@ -31,7 +31,7 @@ def pytest_collection_modifyitems(config, items):
 # 가짜 MCP 도구
 # ---------------------------------------------------------------
 def mcp_result(value):
-    """실제 MCP 어댑터처럼 text content block 리스트로 감싼다 (agents.query_graph._parse가 푸는 형식)."""
+    """실제 MCP 어댑터처럼 text content block 리스트로 감싼다 (agents.mcp_client.parse_mcp_tool_result가 푸는 형식)."""
     return [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}]
 
 
@@ -100,8 +100,8 @@ def fake_llm(monkeypatch):
         async def ainvoke(self, prompt: str):
             return registry.answer(self.schema, prompt)
 
-    for mod in ("agents.job_search_graph", "agents.profile_gap_graph",
-                "agents.company_research_graph", "agents.supervisor"):
+    for mod in ("agents.graphs.job_search_graph", "agents.graphs.profile_gap_graph",
+                "agents.graphs.company_research_graph", "agents.supervisor"):
         monkeypatch.setattr(f"{mod}.LLM", FakeLLM)
     return registry
 
