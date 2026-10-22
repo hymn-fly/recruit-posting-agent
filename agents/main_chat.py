@@ -20,7 +20,7 @@ from agents.mcp_client import open_tools, parse_mcp_tool_result  # noqa: E402
 from agents.supervisor import make_graph, turn_input  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="  [%(name)s] %(message)s")
-for logger_name in ("agents.supervisor", "agents.graphs.company_research_graph"):
+for logger_name in ("agents.supervisor", "agents.graphs.job_search_graph", "agents.graphs.company_research_graph"):
     logging.getLogger(logger_name).setLevel(logging.INFO)
 
 

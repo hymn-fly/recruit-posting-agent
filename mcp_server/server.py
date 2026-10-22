@@ -187,82 +187,6 @@ async def record_scrape_run(company_name: str, status: str, detail: Optional[str
     return {"id": rid}
 
 
-# search_jobs의 필드별 의미 검색: (인자 이름, 비교할 임베딩 컬럼)
-FIELD_QUERIES = (("q_responsibilities", "embedding_responsibilities"),
-                 ("q_required", "embedding_required"),
-                 ("q_preferred", "embedding_preferred"))
-
-
-@mcp.tool()
-async def search_jobs(title_keywords: Optional[list[str]] = None,
-                      q_responsibilities: Optional[str] = None,
-                      q_required: Optional[str] = None,
-                      q_preferred: Optional[str] = None,
-                      company_name: Optional[str] = None,
-                      category: Optional[str] = None, location: Optional[str] = None,
-                      only_active: bool = True, limit: int = 20) -> list[dict]:
-    """공고 검색. 직무명은 제목 키워드 매칭, 하는 일/자격요건은 필드별 임베딩 cosine 유사도로 비교한다.
-
-    title_keywords: 직무명 키워드(예: ["백엔드", "Backend"]). 제목에 하나라도 부분일치하는 공고만 (ILIKE).
-    q_responsibilities / q_required / q_preferred: 각각 하는 일 / 필수 역량 / 우대 역량과 비교할 서술문.
-      주어진 질의마다 해당 컬럼 임베딩과 cosine 유사도(0~1)를 구하고, 그 평균을 similarity로 정렬한다.
-      질의가 주어진 컬럼이 모두 비어 있는 공고는 제외한다. 질의가 없으면 최근 확인 순으로 정렬한다.
-    sim_*에 컬럼별 유사도도 돌려준다. 파라미터 바인딩된 SQL만 실행한다.
-    """
-    conds, args = [], []
-
-    def add(sql: str, value):
-        args.append(value)
-        conds.append(sql.format(n=len(args)))
-
-    titles = [t for t in (title_keywords or []) if t and t.strip()]
-    if titles:
-        args.append([f"%{t.strip()}%" for t in titles])
-        conds.append(f"j.title ILIKE ANY(${len(args)}::text[])")
-    if company_name:
-        add("c.name ILIKE ${n}", f"%{company_name}%")
-    if category:
-        add("j.category ILIKE ${n}", f"%{category}%")
-    if location:
-        add("j.location ILIKE ${n}", f"%{location}%")
-    if only_active:
-        conds.append("j.is_active")
-
-    queries = {"q_responsibilities": q_responsibilities, "q_required": q_required,
-               "q_preferred": q_preferred}
-    asked = [(name, col) for name, col in FIELD_QUERIES if (queries[name] or "").strip()]
-    vecs = await asyncio.gather(*(embed_query(queries[name]) for name, _ in asked))
-    sim_cols, sim_names = [], []
-    for (name, col), vec in zip(asked, vecs):
-        args.append(to_pg(vec))
-        sim_name = "sim_" + col.removeprefix("embedding_")
-        sim_cols.append(f"1 - (j.{col} <=> ${len(args)}::vector) AS {sim_name}")
-        sim_names.append(sim_name)
-
-    where = ("WHERE " + " AND ".join(conds)) if conds else ""
-    limit = max(1, min(int(limit), 100))
-    base_cols = """j.id, c.name AS company, c.industry, j.title, j.url, j.location, j.employment_type,
-                   j.min_years, j.category, j.responsibilities, j.required_qualifications,
-                   j.preferred_qualifications, j.posted_at, j.deadline, j.last_seen_at"""
-    if sim_names:
-        # 질의가 주어진 컬럼 유사도의 평균. NULL 컬럼은 빼고 평균낸다
-        num = " + ".join(f"COALESCE({n}, 0)" for n in sim_names)
-        den = " + ".join(f"({n} IS NOT NULL)::int" for n in sim_names)
-        sql = f"""SELECT * FROM (
-                    SELECT *, ({num}) / NULLIF({den}, 0) AS similarity FROM (
-                      SELECT {base_cols}, {", ".join(sim_cols)}
-                      FROM job_postings j JOIN companies c ON c.id = j.company_id {where}) s
-                  ) t WHERE similarity IS NOT NULL
-                  ORDER BY similarity DESC LIMIT {limit}"""
-    else:
-        sql = f"""SELECT {base_cols} FROM job_postings j JOIN companies c ON c.id = j.company_id
-                  {where} ORDER BY j.last_seen_at DESC LIMIT {limit}"""
-    p = await pool()
-    rows = await p.fetch(sql, *args)
-    return [{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dict(r).items()
-             if k != "last_seen_at"} for r in rows]
-
-
 def _row(r) -> dict:
     return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in dict(r).items()}
 
@@ -277,16 +201,13 @@ def _posting_text(r) -> str:
 # 임베딩 방식이 바뀌면 올린다 (hash가 달라져 전체 재임베딩됨)
 EMBED_VERSION = "v3-fields-raw"
 FIELD_COLUMNS = ("responsibilities", "required_qualifications", "preferred_qualifications")
-# 컬럼별 검색 기본 가중치 (하는 일 / 필수 / 우대)
-DEFAULT_WEIGHTS = (0.5, 0.35, 0.15)
-CANDIDATE_POOL = 200   # 통합 벡터 HNSW로 먼저 뽑는 후보 수. 이 안에서 컬럼별 가중 점수로 재정렬
 
 
 def _field_texts(r) -> list[Optional[str]]:
     """컬럼별 임베딩 원문(본문만). 값이 없으면 None.
 
     제목을 앞에 붙이면 세 컬럼 벡터가 제목 쪽으로 쏠려 컬럼 간 유사도 차이가 1/2~1/3로 줄었다(CHANGELOG #20).
-    제목은 통합 벡터(embedding)에 들어 있고 후보 선정에 쓰인다.
+    직무명(제목)은 semantic_search_jobs의 title_keywords 키워드 필터로 다룬다.
     """
     return [r[col] or None for col in FIELD_COLUMNS]
 
@@ -330,32 +251,26 @@ async def embed_pending_postings(limit: int = 100) -> dict:
     return await embed_pending(limit)
 
 
-@mcp.tool()
-async def semantic_search_jobs(query: str, category: Optional[str] = None,
-                               company_name: Optional[str] = None,
-                               location: Optional[str] = None,
-                               max_years: Optional[int] = None,
-                               w_responsibilities: float = DEFAULT_WEIGHTS[0],
-                               w_required: float = DEFAULT_WEIGHTS[1],
-                               w_preferred: float = DEFAULT_WEIGHTS[2],
-                               only_active: bool = True, limit: int = 20) -> list[dict]:
-    """역할·자격요건 의미 기반(임베딩) 공고 검색. query는 원하는 역할/경험을 서술한 문장.
+# 의미 검색 질의 인자 → (비교할 컬럼별 임베딩, 결과에 붙일 유사도 키)
+FIELD_QUERY_TO_EMBEDDING = {
+    "q_responsibilities": ("embedding_responsibilities", "sim_responsibilities"),
+    "q_required": ("embedding_required", "sim_required"),
+    "q_preferred": ("embedding_preferred", "sim_preferred"),
+}
 
-    하는 일/필수/우대 역량을 컬럼별로 비교해 가중합한 similarity(0~1, 클수록 유사)로 정렬한다.
-    값이 없는 컬럼은 빼고 나머지 가중치로 정규화하며, 세 컬럼이 모두 없으면 통합 임베딩 유사도를 쓴다.
-    w_*: 컬럼별 가중치(예: 자격요건 위주로 찾을 때 w_required를 높임). sim_*에 컬럼별 유사도도 돌려준다.
-    max_years: 요구 최소 경력이 이 값 이하인 공고(또는 명시 없음)만.
-    """
-    conds, args = ["j.embedding IS NOT NULL"], [to_pg(await embed_query(query))]
-    weights = [max(0.0, float(w)) for w in (w_responsibilities, w_required, w_preferred)]
-    if not any(weights):
-        weights = list(DEFAULT_WEIGHTS)
-    args += weights   # $2, $3, $4
+
+def build_posting_filter_conditions(title_keywords, company_name, category, location, max_years,
+                                    only_active) -> tuple[list[str], list]:
+    """WHERE로 확정할 수 있는 조건(SQL 조각, 바인딩 값)을 만든다. 값은 모두 $n 파라미터로 넘긴다."""
+    conditions, args = [], []
 
     def add(sql: str, value):
         args.append(value)
-        conds.append(sql.format(n=len(args)))
+        conditions.append(sql.format(n=len(args)))
 
+    titles = [t.strip() for t in (title_keywords or []) if t and t.strip()]
+    if titles:   # 제목에 키워드가 하나라도 들어가면 통과
+        add("j.title ILIKE ANY(${n}::text[])", [f"%{t}%" for t in titles])
     if company_name:
         add("c.name ILIKE ${n}", f"%{company_name}%")
     if category:
@@ -365,36 +280,81 @@ async def semantic_search_jobs(query: str, category: Optional[str] = None,
     if max_years is not None:
         add("(j.min_years IS NULL OR j.min_years <= ${n})", int(max_years))
     if only_active:
-        conds.append("j.is_active")
+        conditions.append("j.is_active")
+    return conditions, args
+
+
+def score_posting_by_field_similarity(field_similarities: dict[str, Optional[float]]) -> Optional[float]:
+    """질의가 주어진 컬럼들의 유사도를 공고 하나의 점수(클수록 잘 맞음)로 합친다. None이면 결과에서 뺀다.
+
+    field_similarities: 질의가 주어진 컬럼만 들어 있다. 예) {"sim_responsibilities": 0.78, "sim_required": None}
+      값이 None이면 그 공고에 해당 본문이 없어 비교하지 못한 것이다.
+    """
+    # TODO(human)
+    raise NotImplementedError
+
+
+@mcp.tool()
+async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
+                               q_responsibilities: Optional[str] = None,
+                               q_required: Optional[str] = None,
+                               q_preferred: Optional[str] = None,
+                               company_name: Optional[str] = None,
+                               category: Optional[str] = None,
+                               location: Optional[str] = None,
+                               max_years: Optional[int] = None,
+                               only_active: bool = True, limit: int = 20) -> list[dict]:
+    """채용공고 검색: WHERE 조건으로 먼저 거른 뒤, 남은 공고 전부를 컬럼별 임베딩으로 정확히 비교한다.
+
+    필터(정확히 일치/부분일치):
+      title_keywords: 직무명 키워드(예: ["MLOps", "엠엘옵스"]). 제목에 하나라도 들어간 공고만.
+      company_name / category / location: 부분일치. max_years: 요구 최소 경력이 이 값 이하(또는 명시 없음).
+    의미 검색(각 질의를 해당 컬럼 임베딩과 cosine 유사도로 비교, 주어진 것만):
+      q_responsibilities ↔ 하는 일, q_required ↔ 필수 역량, q_preferred ↔ 우대 역량.
+      공고 본문에 적혀 있을 법한 문장으로 쓴다. 예) q_required="Kubernetes 기반 서비스 운영 경험"
+    결과: similarity(컬럼별 유사도를 합친 점수) 내림차순, 질의한 컬럼의 sim_*도 포함.
+      의미 검색 질의가 하나도 없으면 필터만 적용해 최근 확인 순으로 돌려준다(similarity=None).
+    """
     limit = max(1, min(int(limit), 100))
-    sql = f"""
-        WITH cand AS (
-            SELECT j.id, c.name AS company, c.industry, j.title, j.url, j.location,
-                   j.employment_type, j.min_years, j.category, j.responsibilities,
-                   j.required_qualifications, j.preferred_qualifications, j.deadline,
-                   1 - (j.embedding <=> $1::vector)                  AS sim_all,
-                   1 - (j.embedding_responsibilities <=> $1::vector) AS sim_responsibilities,
-                   1 - (j.embedding_required <=> $1::vector)         AS sim_required,
-                   1 - (j.embedding_preferred <=> $1::vector)        AS sim_preferred
-            FROM job_postings j JOIN companies c ON c.id = j.company_id
-            WHERE {" AND ".join(conds)}
-            ORDER BY j.embedding <=> $1::vector LIMIT {CANDIDATE_POOL}
-        ), scored AS (
-            SELECT *,
-                   COALESCE($2::float8 * sim_responsibilities, 0) + COALESCE($3::float8 * sim_required, 0)
-                     + COALESCE($4::float8 * sim_preferred, 0) AS num,
-                   (CASE WHEN sim_responsibilities IS NULL THEN 0 ELSE $2::float8 END)
-                     + (CASE WHEN sim_required IS NULL THEN 0 ELSE $3::float8 END)
-                     + (CASE WHEN sim_preferred IS NULL THEN 0 ELSE $4::float8 END) AS den
-            FROM cand
-        )
-        SELECT id, company, industry, title, url, location, employment_type, min_years, category,
-               responsibilities, required_qualifications, preferred_qualifications, deadline,
-               CASE WHEN den > 0 THEN num / den ELSE sim_all END AS similarity,
-               sim_responsibilities, sim_required, sim_preferred
-        FROM scored ORDER BY similarity DESC LIMIT {limit}"""
+
+    # 1) WHERE로 확정할 수 있는 조건부터 건다
+    conditions, args = build_posting_filter_conditions(
+        title_keywords, company_name, category, location, max_years, only_active)
+
+    # 2) 주어진 의미 검색 질의만 임베딩해서, 해당 컬럼과의 유사도 SELECT 식을 만든다
+    field_queries = {"q_responsibilities": q_responsibilities, "q_required": q_required,
+                     "q_preferred": q_preferred}
+    asked_fields = [name for name, text in field_queries.items() if text and text.strip()]
+    query_vectors = await asyncio.gather(*(embed_query(field_queries[name]) for name in asked_fields))
+    similarity_selects, similarity_keys = [], []
+    for name, vector in zip(asked_fields, query_vectors):
+        embedding_column, similarity_key = FIELD_QUERY_TO_EMBEDDING[name]
+        args.append(to_pg(vector))
+        similarity_selects.append(f"1 - (j.{embedding_column} <=> ${len(args)}::vector) AS {similarity_key}")
+        similarity_keys.append(similarity_key)
+
+    # 3) 필터를 통과한 공고 전부를 가져온다 (벡터 인덱스 없이 정확 비교: 근사 검색·후필터 누락이 없다)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    select_columns = ", ".join(
+        ["j.id", "c.name AS company", "c.industry", "j.title", "j.url", "j.location", "j.employment_type",
+         "j.min_years", "j.category", "j.responsibilities", "j.required_qualifications",
+         "j.preferred_qualifications", "j.deadline"] + similarity_selects)
+    order_and_limit = "" if similarity_keys else f"ORDER BY j.last_seen_at DESC LIMIT {limit}"
     p = await pool()
-    return [_row(r) for r in await p.fetch(sql, *args)]
+    rows = [_row(r) for r in await p.fetch(
+        f"SELECT {select_columns} FROM job_postings j JOIN companies c ON c.id = j.company_id "
+        f"{where} {order_and_limit}", *args)]
+    if not similarity_keys:
+        return [{**row, "similarity": None} for row in rows]
+
+    # 4) 컬럼별 유사도를 점수로 합쳐 높은 순으로 자른다 (점수가 None인 공고는 뺀다)
+    scored_rows = []
+    for row in rows:
+        score = score_posting_by_field_similarity({key: row[key] for key in similarity_keys})
+        if score is not None:
+            scored_rows.append({**row, "similarity": score})
+    scored_rows.sort(key=lambda row: row["similarity"], reverse=True)
+    return scored_rows[:limit]
 
 
 @mcp.tool()

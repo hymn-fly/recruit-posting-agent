@@ -14,13 +14,19 @@ from tests.integration_tests.conftest import pick_posting, profile_summary, requ
 pytestmark = pytest.mark.integration
 
 
-async def test_MCP_semantic_search_jobs는_컬럼별_유사도를_돌려준다():
+async def test_MCP_semantic_search_jobs는_필터_후_질의한_컬럼별_유사도로_정렬한다():
     async with open_tools() as tools:
         rows = parse_mcp_tool_result(await tools["semantic_search_jobs"].ainvoke(
-            {"query": "Kubernetes 운영과 모델 서빙 경험", "limit": 5}))
+            {"title_keywords": ["MLOps", "LLMOps", "Inference"], "q_required": "Kubernetes 운영과 모델 서빙 경험",
+             "limit": 5}))
+        unfiltered = parse_mcp_tool_result(await tools["semantic_search_jobs"].ainvoke(
+            {"q_required": "Kubernetes 운영과 모델 서빙 경험", "limit": 5}))
     assert rows, "검색 결과 없음"
-    assert {"id", "similarity", "sim_responsibilities", "sim_required", "sim_preferred"} <= rows[0].keys()
+    assert all(any(k.lower() in r["title"].lower() for k in ("mlops", "llmops", "inference")) for r in rows)
+    assert {"id", "similarity", "sim_required"} <= rows[0].keys()
+    assert "sim_responsibilities" not in rows[0]   # 질의하지 않은 컬럼은 비교하지 않는다
     assert rows == sorted(rows, key=lambda r: r["similarity"], reverse=True)
+    assert len(unfiltered) == 5
 
 
 async def test_job_search_Agent():

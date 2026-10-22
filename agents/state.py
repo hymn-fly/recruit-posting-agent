@@ -5,33 +5,20 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 
-class SearchParams(BaseModel):
-    title_keywords: Optional[list[str]] = Field(
-        None, description="직무명 키워드(제목 부분일치, 하나라도 맞으면 통과). 직무명을 물었을 때만. 예: ['백엔드', 'Backend']")
-    q_responsibilities: Optional[str] = Field(
-        None, description="'하는 일'에 대한 질문일 때, 하는 일 본문과 비교할 서술문")
-    q_required: Optional[str] = Field(
-        None, description="필수 자격요건(기술·경력)에 대한 질문일 때, 필수 역량 본문과 비교할 서술문")
-    q_preferred: Optional[str] = Field(
-        None, description="우대 사항에 대한 질문일 때, 우대 역량 본문과 비교할 서술문")
-    company_name: Optional[str] = None
-    category: Optional[str] = None
-    location: Optional[str] = None
-
-
-class QueryState(TypedDict, total=False):
-    question: str
-    profile: str
-    params: SearchParams
-    results: list[dict]
-    answer: str
-
-
 # ---------------------------------------------------------------
 # 채용공고 조회 Agent (RAG)
 # ---------------------------------------------------------------
 class JobSearchPlan(BaseModel):
-    query: str = Field(description="임베딩 검색문. 원하는 역할·하는 일·보유/요구 역량을 서술한 1~3문장")
+    """semantic_search_jobs 호출 파라미터. 직무명은 키워드 필터, 하는 일·자격요건은 컬럼별 의미 검색."""
+    title_keywords: Optional[list[str]] = Field(
+        None, description="직무명을 말했을 때만: 제목 부분일치 키워드(한글/영문 표기 둘 다). 예: ['MLOps', '엠엘옵스']. "
+                          "'개발자'·'엔지니어'처럼 흔한 단어는 넣지 않는다")
+    q_responsibilities: Optional[str] = Field(
+        None, description="원하는 '하는 일'을 공고 본문에 적혀 있을 법한 문장으로. 예: 'LLM 기반 에이전트 서비스 개발'")
+    q_required: Optional[str] = Field(
+        None, description="필수 역량(기술·경력)과 비교할 문장. 예: 'Kubernetes 기반 서비스 운영 경험 3년 이상'")
+    q_preferred: Optional[str] = Field(
+        None, description="우대 역량과 비교할 문장. 예: 'LangGraph 등 에이전트 프레임워크 운영 경험'")
     category: Optional[str] = Field(None, description="명시된 경우만: AI Engineer / ML Engineer / LLM Engineer / MLOps / Data")
     company_name: Optional[str] = None
     location: Optional[str] = None

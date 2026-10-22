@@ -16,7 +16,7 @@ from agents.mcp_client import parse_mcp_tool_result  # noqa: E402
 
 async def pick_posting(tools) -> dict:
     """DB에서 하는 일·자격요건이 채워진 활성 공고 1건."""
-    rows = parse_mcp_tool_result(await tools["semantic_search_jobs"].ainvoke({"query": "LLM 에이전트 개발", "limit": 5}))
+    rows = parse_mcp_tool_result(await tools["semantic_search_jobs"].ainvoke({"q_responsibilities": "LLM 에이전트 개발", "limit": 5}))
     rows = [r for r in rows if r.get("responsibilities") and r.get("required_qualifications")]
     if not rows:
         pytest.skip("임베딩된 공고가 없음 (scripts/embed_postings.py 먼저 실행)")
