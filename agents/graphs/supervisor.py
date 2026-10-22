@@ -14,7 +14,7 @@ from agents.llm import LLM
 from agents.mcp_client import get_first_mcp_result
 from agents.state import AppState, Route
 
-log = logging.getLogger("agents.supervisor")
+log = logging.getLogger(__name__)
 
 MAX_STEPS = 3
 HISTORY = 6   # 라우터에 보여줄 최근 메시지 수

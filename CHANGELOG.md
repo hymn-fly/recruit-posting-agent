@@ -246,6 +246,22 @@
   - `main_query.py` 실행: 파라미터 → 호출 인자 → 결과 → 답변 로그 출력. `main_chat.py`로 공고 154 기업분석: 계열사 판별 → 캐시 적중(토픽 4개 재사용) → role만 Tavily 검색 → research id=7 저장까지 로그 확인.
 - **남은 것**: `query_graph` 단위 테스트 없음.
 
+### #26 채용공고 검색을 "WHERE 필터 → 컬럼별 정확 비교"로 재구성, query_graph 삭제, Supervisor를 graphs/로 이동
+- **왜**
+  - `query_graph`(+`main_query.py`, `search_jobs`)는 Supervisor 대화에서 쓰이지 않는 별도 검색 경로였다. 직무명 키워드 필터 + 컬럼별 질의문이라는 장점만 `job_search_graph`로 합친다.
+  - 기존 `semantic_search_jobs`는 질문 전체를 `query` 하나로 세 컬럼과 비교했고, 필터와 `ORDER BY 통합벡터 LIMIT 200`을 한 쿼리에 묶었다. 데이터가 커져 HNSW 인덱스를 타면 인덱스가 먼저 약 40건(`hnsw.ef_search`)만 내고 WHERE가 나중에 적용돼, 좁은 필터에서 맞는 공고가 빠질 수 있었다(post-filtering).
+  - Supervisor도 StateGraph를 조립하는 그래프라 Agent 그래프들과 같은 `graphs/`에 둔다.
+- **변경** (d1d6de4, 90e3d2b + 이번 커밋)
+  - `mcp_server/server.py`: `search_jobs` 삭제. `semantic_search_jobs(title_keywords, q_responsibilities, q_required, q_preferred, company_name, category, location, max_years, only_active, limit)` — ① `build_posting_filter_conditions`로 WHERE(제목 ILIKE ANY, 부분일치, 최대 경력, 활성) ② 주어진 `q_*`만 임베딩해 해당 컬럼 임베딩과 cosine 유사도 ③ 필터를 통과한 공고 전부를 벡터 인덱스 없이 정확 비교 ④ `score_posting_by_field_similarity`로 점수화·정렬. `q_*`가 없으면 최근 확인 순, `similarity=None`. 결과에는 질의한 컬럼의 `sim_*`만 들어간다. 가중치 인자·`CANDIDATE_POOL`·`DEFAULT_WEIGHTS` 삭제.
+  - `agents/state.py`: `JobSearchPlan`을 `title_keywords` + `q_*` + 필터로 변경. `SearchParams`/`QueryState` 삭제.
+  - `agents/graphs/job_search_graph.py`: planner 프롬프트에 query_graph의 파라미터 규칙(직무명 → 제목 키워드, 흔한 단어 제외, 본문에 있을 법한 문장, 프로필 반영) 이전. 파라미터·검색 결과·추천 로그. 유사도가 없으면 `-`로 표시.
+  - 삭제: `agents/graphs/query_graph.py`, `agents/main_query.py`.
+  - 이동(`git mv`): `agents/supervisor.py` → `agents/graphs/supervisor.py`, 로거 `__name__`. `main_chat.py`·tests import 갱신.
+  - `tests/`: 새 파라미터로 갱신, `test_search_filters.py`(필터 조립·바인딩·인젝션) 신규, 유사도 없는 결과 표시 테스트.
+  - `README.md`: Supervisor를 graphs 표로 옮기고, 삭제된 `main_query`/`query_graph`/`search_jobs`/가중치 설명 정리, 검색 방식 설명 갱신.
+- **검증**: `ruff --select F401,F811,F821` 통과, `uv run pytest` 18 passed.
+- **미완료**: `score_posting_by_field_similarity`가 아직 `NotImplementedError`다. `q_*`가 있는 검색은 모두 실패하므로(대화에서는 "채용공고 조회 실패") 구현 전까지 push하지 않는다.
+
 ---
 
 ## 미해결 / 다음 후보

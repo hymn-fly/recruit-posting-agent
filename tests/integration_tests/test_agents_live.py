@@ -6,8 +6,7 @@
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
-from agents import supervisor
-from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph
+from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph, supervisor
 from agents.mcp_client import open_tools, parse_mcp_tool_result
 from tests.integration_tests.conftest import pick_posting, profile_summary, require_env
 

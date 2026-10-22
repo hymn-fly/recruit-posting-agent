@@ -1,11 +1,10 @@
-"""Supervisor(agents/supervisor.py) 단위 테스트: 라우팅과 공고 선택만 보고, 하위 Agent 그래프는 가짜로 바꾼다."""
+"""Supervisor(agents/graphs/supervisor.py) 단위 테스트: 라우팅과 공고 선택만 보고, 하위 Agent 그래프는 가짜로 바꾼다."""
 from types import SimpleNamespace
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
-from agents import supervisor
-from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph
+from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph, supervisor
 from agents.state import Route
 
 ALL_TOOLS = ("semantic_search_jobs", "get_cached_research", "save_research",

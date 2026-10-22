@@ -101,7 +101,7 @@ def fake_llm(monkeypatch):
             return registry.answer(self.schema, prompt)
 
     for mod in ("agents.graphs.job_search_graph", "agents.graphs.profile_gap_graph",
-                "agents.graphs.company_research_graph", "agents.supervisor"):
+                "agents.graphs.company_research_graph", "agents.graphs.supervisor"):
         monkeypatch.setattr(f"{mod}.LLM", FakeLLM)
     return registry
 

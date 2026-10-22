@@ -4,8 +4,8 @@
 ## 폴더 구조
 ```
 make-agents/
-├── agents/          # 조립·공용: Supervisor, 진입점(CLI), 상태, LLM, MCP 연결
-│   └── graphs/      # Agent별 LangGraph 그래프 (채용공고 조회 / 기업분석 / 내 프로필 / 단발 질의)
+├── agents/          # 공용·진입점: CLI, 상태, LLM, MCP 연결
+│   └── graphs/      # LangGraph 그래프: Supervisor + Agent별(채용공고 조회 / 기업분석 / 내 프로필)
 ├── mcp_server/      # DB 접근 계층: MCP 서버 2개 + 임베딩
 ├── db/              # Postgres 스키마
 ├── scripts/         # 1회성/관리용 CLI
@@ -15,28 +15,26 @@ make-agents/
 └── README.md, PLAN.md, CHANGELOG.md, pyproject.toml, uv.lock, .env.example
 ```
 
-### `agents/`: 조립·공용 코드
+### `agents/`: 공용·진입점 코드
 | 파일 | 역할 |
 |---|---|
-| `state.py` | 모든 그래프의 상태(TypedDict)와 LLM 구조화 출력 스키마(pydantic). 질의 / Agent별 / Supervisor용 섹션으로 나뉨 |
+| `state.py` | 모든 그래프의 상태(TypedDict)와 LLM 구조화 출력 스키마(pydantic). Agent별 / Supervisor용 섹션으로 나뉨 |
 | `llm.py` | LLM 공용 래퍼 `LLM`. 기본 Gemma → 시간 초과·에러 시 `gpt-6-luna` 폴백, 실패하면 5분간 Gemma를 건너뛰는 서킷 브레이커. `schema=`면 구조화 출력 |
 | `mcp_client.py` | MCP 서버 2개 연결. `get_tools()`(호출마다 서버 기동, 단발 실행용) / `open_tools()`(세션 유지, REPL·테스트용). MCP 결과 정규화 `parse_mcp_tool_result()` / 단건 `get_first_mcp_result()` |
-| `supervisor.py` | **Supervisor**. 라우터 LLM이 다음 Agent를 고르고, "2번 공고"를 추천 목록에서 찾아 선택. 한 턴 최대 3개 Agent, Agent별 MCP 도구 제한 |
 | `main_chat.py` | 대화 CLI (`/select N`, `/id ID`, `/reset`, `/quit`) |
-| `main_query.py` | 단발 질의 CLI (`graphs/query_graph.py` 실행, 파라미터·결과 로그 출력) |
 
-### `agents/graphs/`: Agent별 그래프
+### `agents/graphs/`: Supervisor와 Agent별 그래프
 | 파일 | 역할 |
 |---|---|
-| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(검색문·필터) → `retrieve`(`semantic_search_jobs` 상위 20건) → `rerank_explain`(LLM이 5건 선택·근거) |
+| `supervisor.py` | **Supervisor**. 라우터 LLM이 다음 Agent를 고르고, "2번 공고"를 추천 목록에서 찾아 선택. 한 턴 최대 3개 Agent, Agent별 MCP 도구 제한 |
+| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(직무명 → 제목 키워드 필터, 하는 일/필수/우대 → 컬럼별 의미 검색 질의) → `retrieve`(`semantic_search_jobs` 상위 20건) → `rerank_explain`(LLM이 5건 선택·근거) |
 | `company_research_graph.py` | **기업분석 Agent**. `plan_queries`(실제 계열사·산업·경쟁사, 토픽별 검색어) → `load_cache`(14일) → `search_topic`×N(Tavily 병렬) → `synthesize`(리포트·출처) |
 | `profile_gap_graph.py` | **내 프로필 Agent**. `load` → `decompose`(요구사항 분해) → `match`(요구사항별 이력서 근거 검색·판정) → `synthesize`(강점/부족한 점/보완 방법) |
-| `query_graph.py` | 단발 질의 그래프. `search_jobs`(제목 키워드 + 하는 일/필수/우대 질의문별 임베딩 유사도)로 검색 |
 
 ### `mcp_server/`: DB 접근 계층
 | 파일 | 역할 |
 |---|---|
-| `server.py` | **`job-db`** MCP 서버. 적재(`upsert_company`, `upsert_job_posting`, `list_known_urls`, `touch_postings`, `record_filtered_postings`, `list_filtered_urls`, `record_scrape_run`), 검색(`semantic_search_jobs`, `search_jobs`, `get_job_posting`, `list_companies`), 임베딩(`embed_pending_postings`), 리서치 캐시(`get_cached_research`, `save_research`). 커넥션 풀 `pool()` |
+| `server.py` | **`job-db`** MCP 서버. 적재(`upsert_company`, `upsert_job_posting`, `list_known_urls`, `touch_postings`, `record_filtered_postings`, `list_filtered_urls`, `record_scrape_run`), 검색(`semantic_search_jobs`, `get_job_posting`, `list_companies`), 임베딩(`embed_pending_postings`), 리서치 캐시(`get_cached_research`, `save_research`). 커넥션 풀 `pool()` |
 | `profile_server.py` | **`profile-db`** MCP 서버. 개인 자료 읽기 전용(`get_profile_summary`, `search_profile`, `list_profile_documents`). 예약 작업에는 등록하지 않아 이력서가 노출되지 않음 |
 | `embeddings.py` | Gemini 임베딩(768차원) `embed_documents`/`embed_query`, 무료 티어 대응 배치·재시도, pgvector 변환, 해시 |
 
@@ -86,7 +84,7 @@ flowchart LR
     end
 
     subgraph Chat["대화 (agents/main_chat.py)"]
-        U(("사용자")) --> SV["Supervisor<br/>agents/supervisor.py"]
+        U(("사용자")) --> SV["Supervisor<br/>graphs/supervisor.py"]
         SV --> JS["채용공고 조회 Agent<br/>graphs/job_search_graph.py"]
         SV --> CR["기업분석 Agent<br/>graphs/company_research_graph.py"]
         SV --> PG["내 프로필 Agent<br/>graphs/profile_gap_graph.py"]
@@ -194,7 +192,7 @@ sequenceDiagram
     SV->>SV: 라우팅 (Route.next = job_search)
     SV->>JS: question
     JS->>JS: plan: 역할·자격 중심 검색문 + 명시된 필터
-    JS->>JDB: semantic_search_jobs(query) → 유사도 top 20
+    JS->>JDB: semantic_search_jobs(title_keywords, q_*, 필터) → 필터 후 컬럼별 유사도 top 20
     JS->>JS: rerank_explain: LLM이 5건 선택 + 근거
     JS-->>SV: candidates 1~5번
     SV-->>U: 추천 공고 목록
@@ -266,6 +264,7 @@ uv run python agents/main_chat.py
 ```
 - 명령: `/select N`(추천 N번 선택), `/id ID`(공고 id로 선택), `/reset`, `/quit`
 - 필요 키: `GOOGLE_API_KEY`(LLM·임베딩), `OPENAI_API_KEY`(폴백), `TAVILY_API_KEY`(기업분석), `NEON_DATABASE_URL`
-- 공고 검색 점수: 하는 일 / 필수 / 우대 역량을 **컬럼별 벡터**로 비교해 `0.5 / 0.35 / 0.15` 가중합한다(값이 없는 컬럼은 빼고 정규화).
-  `semantic_search_jobs(w_responsibilities=, w_required=, w_preferred=)`로 가중치를 바꿀 수 있고, 결과에 `sim_*` 컬럼별 유사도가 포함된다.
+- 공고 검색(`semantic_search_jobs`): ① 직무명(`title_keywords`)·회사·직군·지역·최대 경력을 **WHERE로 먼저 거르고**
+  ② 남은 공고 전부를 하는 일/필수/우대 질의문(`q_responsibilities`/`q_required`/`q_preferred`)과 **해당 컬럼 임베딩**으로 정확 비교한 뒤
+  ③ `score_posting_by_field_similarity`로 합친 점수 순으로 돌려준다. 결과에 질의한 컬럼의 `sim_*`가 포함된다.
 - 새로 적재된 공고는 `embed_pending_postings`(예약 작업 마지막 단계) 또는 `uv run python scripts/embed_postings.py`로 임베딩해야 검색된다.
