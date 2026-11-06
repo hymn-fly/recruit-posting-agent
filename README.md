@@ -34,7 +34,7 @@ make-agents/
 ### `mcp_server/`: DB 접근 계층
 | 파일 | 역할 |
 |---|---|
-| `server.py` | **`job-db`** MCP 서버. 적재(`upsert_company`, `upsert_job_posting`, `list_known_urls`, `touch_postings`, `record_filtered_postings`, `list_filtered_urls`, `record_scrape_run`), 검색(`semantic_search_jobs`, `get_job_posting`, `list_companies`), 임베딩(`embed_pending_postings`), 리서치 캐시(`get_cached_research`, `save_research`). 커넥션 풀 `pool()` |
+| `server.py` | **`job-db`** MCP 서버. 적재(`upsert_company`, `upsert_job_posting`, `list_known_urls`, `touch_postings`, `record_filtered_postings`, `list_filtered_urls`, `record_scrape_run`), 크롤링 상태(`list_latest_scrape_status_by_source`), 검색(`semantic_search_jobs`, `get_job_posting`, `list_companies`), 임베딩(`embed_pending_postings`), 리서치 캐시(`get_cached_research`, `save_research`). 커넥션 풀 `pool()` |
 | `profile_server.py` | **`profile-db`** MCP 서버. 개인 자료 읽기 전용(`get_profile_summary`, `search_profile`, `list_profile_documents`). 예약 작업에는 등록하지 않아 이력서가 노출되지 않음 |
 | `embeddings.py` | Gemini 임베딩(768차원) `embed_documents`/`embed_query`, 무료 티어 대응 배치·재시도, pgvector 변환, 해시 |
 
@@ -43,7 +43,7 @@ make-agents/
 |---|---|---|
 | `companies` | 수집 대상 회사, 포털 URL, 접근 방식, 산업 | 적재 |
 | `job_postings` | 공고(하는 일/필수/우대 역량) + 통합·컬럼별 임베딩 | 적재 → 채용공고 조회 |
-| `scrape_runs` | 회사별 수집 성공/실패 로그 | 적재 |
+| `scrape_runs` | 사이트(`source`: 회사 포털 URL 또는 채용 플랫폼 링크)별 수집 성공/실패 로그 | 적재 |
 | `filtered_postings` | AI 공고가 아니라고 걸러낸 공고(필터 검수용) | 적재 |
 | `profile_documents` / `profile_chunks` / `profile_summary` | 이력서 원문 / 검색용 조각+임베딩 / 구조화 요약 | 내 프로필 |
 | `company_research` | 리서치 결과(회사+계열사 단위 캐시) | 기업분석 |
@@ -135,7 +135,7 @@ sequenceDiagram
     JDB->>DB: SELECT companies
     loop 회사마다
         alt robots_blocked / JS 렌더링 불가
-            CD->>JDB: record_scrape_run(unverifiable)
+            CD->>JDB: record_scrape_run(portal_url, unverifiable)
         else 수집 가능
             CD->>Web: 목록 페이지 읽기
             CD->>JDB: list_filtered_urls / list_known_urls
@@ -150,7 +150,7 @@ sequenceDiagram
                     Note over CD: 모아서 record_filtered_postings(stage=detail)
                 end
             end
-            CD->>JDB: record_scrape_run(ok, 건수 요약)
+            CD->>JDB: record_scrape_run(portal_url, ok, 건수 요약)
         end
     end
     CD->>JDB: embed_pending_postings()

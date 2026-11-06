@@ -18,9 +18,9 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
 2. 회사마다 `access_method`에 따라 처리한다.
    - `static_html`: 목록 페이지를 가져와 공고 링크를 찾는다.
    - `js_rendered`: 브라우저 도구(Claude in Chrome)가 있으면 렌더링 후 읽는다. 없으면 건너뛰고
-     `record_scrape_run(status="unverifiable", detail="JS 렌더링 필요, 브라우저 도구 없음")`.
-   - `robots_blocked`: 접근하지 않는다. `record_scrape_run(status="unverifiable", detail="robots.txt 차단")`.
-   - `server_error` / `api_error`: 1회 재시도 후에도 실패하면 `record_scrape_run(status="unverifiable", detail=사유)`.
+     `record_scrape_run(source=portal_url, status="unverifiable", detail="JS 렌더링 필요, 브라우저 도구 없음")`.
+   - `robots_blocked`: 접근하지 않는다. `record_scrape_run(source=portal_url, status="unverifiable", detail="robots.txt 차단")`.
+   - `server_error` / `api_error`: 1회 재시도 후에도 실패하면 `record_scrape_run(source=portal_url, status="unverifiable", detail=사유)`.
    `notes`에 적힌 필터 조건(예: 서울/경기만, 롯데이노베이트 계열사만)은 반드시 적용한다.
 3. 목록에서 AI 관련 후보만 추린다 (제목·직군 기준, 애매하면 후보에 포함).
    후보에서 **제외한 공고는 버리지 말고** 모아서 `record_filtered_postings(company_name, items)`를 회사당 **한 번**만 호출해 기록한다.
@@ -37,7 +37,9 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
      본문에 **실제로 적힌 내용만** 간결히 정리하고 항목은 줄바꿈으로 구분. 없으면 생략(null).
    - `url`은 공고 상세 링크의 절대 URL, `deadline`/`posted_at`은 YYYY-MM-DD, `min_years`는 숫자만.
    - 본문에 없는 정보는 절대 지어내지 않는다.
-6. 회사 처리가 끝나면 `record_scrape_run(company_name, status, detail)`을 호출한다.
+6. 회사 처리가 끝나면 `record_scrape_run(source, status, detail)`을 호출한다.
+   - `source`: 크롤링한 사이트. 회사 채용 포털이면 `list_companies`의 `portal_url`을 그대로,
+     채용 플랫폼(사람인 등)을 크롤링했다면 그 사이트 링크(예: `https://www.saramin.co.kr`)를 넣는다. 회사명은 넣지 않는다.
    - `ok`: detail에 "후보 N건 / 신규 저장 M건 / 기존 갱신 K건 / 목록 단계 제외 J건 / JD 확인 후 제외 L건"
    - `failed`: 오류가 났을 때 사유
    - `unverifiable`: 위 2단계의 확인 불가 사유
@@ -48,6 +50,7 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
 - 한 회사의 실패가 전체를 멈추지 않게 한다. 다음 회사로 넘어간다.
 - 이미 저장된 공고와 이미 걸러낸 공고의 JD를 다시 읽지 않는다 (토큰 절약).
 - 걸러낸 공고의 `is_actually_ai` 컬럼은 사람이 검수해서 채우는 값이니 건드리지 않는다.
+- 사이트별 최근 크롤링 결과는 `list_latest_scrape_status_by_source()`로 확인할 수 있다.
 - 마지막에 회사별 결과(ok/failed/unverifiable)와 신규 저장된 공고 제목 목록을 짧게 요약해 보고한다.
 ```
 

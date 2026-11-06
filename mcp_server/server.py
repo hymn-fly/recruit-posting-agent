@@ -58,21 +58,15 @@ async def _company_id(conn, company_name: str) -> int:
 async def upsert_company(name: str, portal_url: str, access_method: str = "unknown",
                          notes: Optional[str] = None, industry: Optional[str] = None) -> dict:
     """채용공고를 낸 회사(고용주)를 companies 테이블에 등록하거나 갱신한다.
-
-    언제 호출하나:
-      - 파싱한 공고의 회사가 아직 등록되지 않았을 때, upsert_job_posting 전에 호출한다.
-        (upsert_job_posting은 company_name이 companies.name과 정확히 일치해야 저장된다.)
-      - 이미 등록된 회사면 list_companies로 확인한 정확한 이름을 그대로 쓰고, 이 tool은
-        다시 호출하지 않는다. 같은 회사를 다른 표기(예: '현대자동차' vs '현대(현대자동차)')로
-        등록하면 중복 회사가 생긴다.
+    - 파싱한 공고의 회사가 아직 등록되지 않았을 때, upsert_job_posting 전에 호출
+    - 이미 등록된 회사면 list_companies로 확인한 정확한 이름을 그대로 쓰고, 이 tool은 다시 호출하지 않는다 (예: '현대자동차' vs '현대(현대자동차)')
 
     주의: name이 같으면 portal_url, access_method, notes를 전달한 값으로 덮어쓴다.
       기본값으로 재호출하면 기존 access_method가 'unknown', notes가 null로 지워진다.
       industry만 null일 때 기존 값을 유지한다.
 
     Args:
-      name: 공고를 낸 실제 회사명. 사람인·잡코리아·원티드·리멤버·피플앤잡 등 공고를
-        발견한 채용 플랫폼 이름은 넣지 않는다.
+      name: 공고를 낸 실제 회사명. 공고를 발견한 채용 플랫폼 이름 x
       portal_url: 그 회사의 자체 채용 포털 URL. 모르면 회사 공식 홈페이지 URL을 넣는다.
         채용 플랫폼의 공고 URL은 넣지 않는다(공고 URL은 upsert_job_posting의 url에 넣는다).
       access_method: portal_url을 열어 공고를 읽을 수 있는 방식. 다음 중 하나:
@@ -200,18 +194,54 @@ async def list_filtered_urls(company_name: str) -> list[str]:
     return [r["url"] for r in rows]
 
 
+SCRAPE_RUN_STATUSES = ("ok", "failed", "unverifiable")
+
+
 @mcp.tool()
-async def record_scrape_run(company_name: str, status: str, detail: Optional[str] = None) -> dict:
-    """회사별 스크래핑 결과 기록. status: 'ok' | 'failed' | 'unverifiable'."""
-    if status not in ("ok", "failed", "unverifiable"):
-        raise ValueError("status must be ok | failed | unverifiable")
+async def record_scrape_run(source: str, status: str, detail: Optional[str] = None) -> dict:
+    """크롤링한 사이트 1곳의 실행 결과를 scrape_runs에 기록한다. 사이트 1곳당 실행마다 1번 호출한다.
+
+    Args:
+      source: 크롤링한 사이트. scrape_runs의 키라서 같은 사이트는 매번 같은 문자열로 넣는다.
+        - (A) 회사 채용 포털을 크롤링했을 때: list_companies의 portal_url을 그대로 넣는다.
+        - (B) 채용 플랫폼(사람인·잡코리아 등)을 크롤링했을 때: 그 사이트 링크를 넣는다
+          (예: 'https://www.saramin.co.kr'). 회사명은 넣지 않는다.
+      status: 'ok'(정상 확인) | 'failed'(오류) | 'unverifiable'(JS 렌더링·robots 차단 등으로 확인 불가)
+      detail: ok면 건수 요약, failed/unverifiable이면 사유.
+
+    Returns:
+      {"id": 기록 id}
+    """
+    if status not in SCRAPE_RUN_STATUSES:
+        raise ValueError(f"status는 {SCRAPE_RUN_STATUSES} 중 하나여야 함: {status!r}")
+    normalized_source = source.strip()
+    if not normalized_source:
+        raise ValueError("source는 비어 있을 수 없음 (portal_url 또는 사이트 링크)")
+
     p = await pool()
-    async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
-        rid = await conn.fetchval(
-            "INSERT INTO scrape_runs (company_id, status, detail) VALUES ($1,$2,$3) RETURNING id",
-            cid, status, detail)
-    return {"id": rid}
+    run_id = await p.fetchval(
+        "INSERT INTO scrape_runs (source, status, detail) VALUES ($1,$2,$3) RETURNING id",
+        normalized_source, status, detail)
+    return {"id": run_id}
+
+
+@mcp.tool()
+async def list_latest_scrape_status_by_source() -> list[dict]:
+    """크롤링한 사이트(source)별 가장 최근 실행 결과를 반환한다.
+
+    회사 목록(list_companies)과 별개로, 어떤 사이트가 최근에 실패/확인불가였는지 점검할 때 쓴다.
+    source는 회사 portal_url이거나 채용 플랫폼 링크다.
+
+    Returns:
+      [{"source", "status", "detail", "run_at"(ISO 8601)}], 최근 실행 순.
+    """
+    p = await pool()
+    rows = await p.fetch(
+        """SELECT DISTINCT ON (source) source, status, detail, run_at
+           FROM scrape_runs
+           ORDER BY source, run_at DESC""")
+    latest_runs = [{**dict(r), "run_at": r["run_at"].isoformat()} for r in rows]
+    return sorted(latest_runs, key=lambda run: run["run_at"], reverse=True)
 
 
 def _row(r) -> dict:
@@ -440,13 +470,14 @@ async def save_research(company_name: str, target_company: str, topics: list[dic
 
 @mcp.tool()
 async def list_companies() -> list[dict]:
-    """등록된 회사와 접근성 상태, 최근 스크래핑 결과를 반환한다."""
+    """등록된 회사(고용주)와 채용 포털 접근 방식을 반환한다.
+
+    사이트별 최근 크롤링 결과는 list_latest_scrape_status_by_source로 따로 조회한다.
+    """
     p = await pool()
     rows = await p.fetch(
-        """SELECT c.name, c.industry, c.portal_url, c.access_method, c.notes,
-                  (SELECT status FROM scrape_runs s WHERE s.company_id = c.id
-                   ORDER BY run_at DESC LIMIT 1) AS last_status
-           FROM companies c ORDER BY c.name""")
+        """SELECT name, industry, portal_url, access_method, notes
+           FROM companies ORDER BY name""")
     return [dict(r) for r in rows]
 
 

@@ -276,6 +276,20 @@
 - **변경**: `mcp_server/server.py`(`upsert_company` docstring), `prompts/daily_ingest.md`(목표 문단)
 - **검증**: `server.py` 구문 파싱 확인, docstring에서 언급한 `list_companies` tool이 있는지 확인. 동작 코드는 바꾸지 않았다.
 
+### #28 `scrape_runs`를 회사명 대신 크롤링한 사이트(`source`) 기준으로 기록
+- **무엇을**:
+  - `record_scrape_run(company_name, ...)` → `record_scrape_run(source, ...)`. 회사 포털을 크롤링하면(A) `source`에 `portal_url`, 채용 플랫폼을 크롤링하면(B) 사이트 링크(예: `https://www.saramin.co.kr`)를 넣는다.
+  - `scrape_runs.company_id`(FK)를 `source TEXT NOT NULL`로 바꾸고, 인덱스를 `(source, run_at DESC)`로 교체했다.
+  - 새 tool `list_latest_scrape_status_by_source()`: 사이트별 최근 실행 결과 1건씩 반환.
+  - `list_companies`에서 `last_status`를 뺐다. 회사 목록과 크롤링 상태를 따로 조회한다.
+- **왜**: 크롤링 단위는 사이트인데 기록 키가 회사였다. 사람인 같은 채용 플랫폼을 크롤링한 결과를 남기려면 플랫폼을 `companies`에 회사로 등록해야 했고, 그 결과 회사 목록이 오염됐다(#27과 같은 문제).
+- **변경**: `mcp_server/server.py`, `db/schema.sql`, `db/migrations/2026-11-06_scrape_runs_source.sql`(신규), `prompts/daily_ingest.md`, `README.md`
+- **검증**:
+  - Neon에서 마이그레이션을 트랜잭션 안에서 두 번 실행한 뒤 롤백했다. 기존 405행이 모두 `portal_url`로 채워졌고(null 0건) 재실행도 안전했다. `DISTINCT ON` 조회도 확인했다.
+  - 그 뒤 Neon에 실제 적용했다(컬럼: id/status/detail/run_at/source, 405행, null 0건). `list_latest_scrape_status_by_source`는 25개 사이트를 반환했다.
+  - MCP tool 로딩 확인, `uv run pytest` 18 passed / 5 skipped.
+- **남은 데이터 문제**: 피플앤잡·LinkedIn에서 찾은 회사들이 `portal_url`에 플랫폼 검색 URL을 갖고 등록돼 있다(예: `라인플러스` → peoplenjob.com 검색 링크). 이 회사들의 `portal_url`은 정리가 필요하다.
+
 ---
 
 ## 미해결 / 다음 후보

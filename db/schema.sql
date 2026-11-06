@@ -107,21 +107,21 @@ CREATE INDEX IF NOT EXISTS idx_job_postings_company  ON job_postings(company_id)
 -- ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS scrape_runs (
     id          SERIAL PRIMARY KEY,
-    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    source      TEXT NOT NULL,
     status      TEXT NOT NULL,
     detail      TEXT,
     run_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT chk_scrape_runs_status CHECK (status IN ('ok', 'failed', 'unverifiable'))
 );
 
-COMMENT ON TABLE  scrape_runs IS '회사별 스크래핑 실행 기록. "자동 확인 불가" 회사를 추적하는 용도';
+COMMENT ON TABLE  scrape_runs IS '사이트별 크롤링 실행 기록. "자동 확인 불가" 사이트를 추적하는 용도';
 COMMENT ON COLUMN scrape_runs.id         IS '실행 기록 고유 번호 (자동 증가)';
-COMMENT ON COLUMN scrape_runs.company_id IS '스크래핑 대상 회사 (companies.id 참조)';
+COMMENT ON COLUMN scrape_runs.source     IS '크롤링한 사이트: 회사 채용 포털이면 companies.portal_url, 채용 플랫폼이면 사이트 링크(예: https://www.saramin.co.kr)';
 COMMENT ON COLUMN scrape_runs.status     IS '실행 결과: ok(정상 확인) | failed(오류) | unverifiable(JS 렌더링/robots 차단 등으로 확인 불가)';
 COMMENT ON COLUMN scrape_runs.detail     IS '실패/확인불가 사유 등 상세 메모';
 COMMENT ON COLUMN scrape_runs.run_at     IS '실행 시각';
 
-CREATE INDEX IF NOT EXISTS idx_scrape_runs_company ON scrape_runs(company_id);
+CREATE INDEX IF NOT EXISTS idx_scrape_runs_source_run_at ON scrape_runs(source, run_at DESC);
 -- ---------------------------------------------------------------
 -- filtered_postings: LLM 필터가 걸러낸(= job_postings에 저장하지 않은) 공고
 -- 필터가 얼마나 잘 거르는지(놓친 AI 공고/잘못 거른 공고) 사람이 검수하기 위한 테이블
