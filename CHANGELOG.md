@@ -290,6 +290,22 @@
   - MCP tool 로딩 확인, `uv run pytest` 18 passed / 5 skipped.
 - **남은 데이터 문제**: 피플앤잡·LinkedIn에서 찾은 회사들이 `portal_url`에 플랫폼 검색 URL을 갖고 등록돼 있다(예: `라인플러스` → peoplenjob.com 검색 링크). 이 회사들의 `portal_url`은 정리가 필요하다.
 
+### #29 수집 프롬프트 2종을 사이트 단위 `record_scrape_run(source)`에 맞춤
+- **무엇을**: 예약 작업 프롬프트 2개를 `prompts/`에 추가하고, #27·#28 변경에 맞게 고쳤다.
+  - `prompts/ingest_portals_and_job_sites.md` ((A) 자사 채용 사이트 + (B) 사람인·잡코리아·리멤버)
+    - (A)는 `source=portal_url`, (B)는 사이트당 1번 `source=사이트 링크`로 기록하도록 바꿨다. 기존에는 (B)에서 회사마다 `company_name`으로 호출했다.
+    - `upsert_company` 덮어쓰기 규칙을 추가했다. 기존 회사를 갱신할 때 portal_url/access_method/notes/industry를 모두 넘기고 notes는 덧붙인다.
+    - (A) 대상에서 `[via_job_portal]` 회사를 제외했고, robots_blocked 회사도 unverifiable로 기록하도록 했다.
+    - 미등록 회사에서 `list_known_urls`/`list_filtered_urls`가 오류를 내면 빈 목록으로 간주하도록 했다.
+  - `prompts/ingest_wanted_linkedin.md` (원티드·링크드인)
+    - "사이트 결과는 DB에 쓰지 않음" 규칙을 `record_scrape_run(source=사이트 링크)`로 바꿨다.
+    - 더는 필요 없는 "도구가 없으면" 대체 경로를 지웠다.
+    - 원본이 잘려 있던 "페이지 읽기" 끝부분과 "마무리" 절(기록·임베딩·보고)을 채웠다.
+- **왜**: 두 프롬프트가 옛 시그니처 `record_scrape_run(company_name)`과 `list_companies.last_status`를 전제로 하고 있었다. 또 (B)는 새 회사를 다음 (A) 실행 대상으로 등록하고, 원티드·링크드인은 "(A) 대상 아님"으로 등록해서 두 정책이 충돌했다.
+- **변경**: `prompts/ingest_portals_and_job_sites.md`(신규), `prompts/ingest_wanted_linkedin.md`(신규)
+- **검증**: 프롬프트에서 부르는 tool 이름과 인자(`record_scrape_run(source)`, `list_known_urls`, `list_filtered_urls`, `touch_postings`, `record_filtered_postings`, `semantic_search_jobs(company_name 부분일치, title_keywords)`, `embed_pending_postings`의 remaining)를 `server.py`와 대조했다. 실제 예약 실행은 하지 않았다.
+- **참고**: `prompts/daily_ingest.md`는 (A)만 다루는 이전 버전이다.
+
 ---
 
 ## 미해결 / 다음 후보
