@@ -57,7 +57,34 @@ async def _company_id(conn, company_name: str) -> int:
 @mcp.tool()
 async def upsert_company(name: str, portal_url: str, access_method: str = "unknown",
                          notes: Optional[str] = None, industry: Optional[str] = None) -> dict:
-    """회사/포털 메타데이터를 등록하거나 갱신한다."""
+    """채용공고를 낸 회사(고용주)를 companies 테이블에 등록하거나 갱신한다.
+
+    언제 호출하나:
+      - 파싱한 공고의 회사가 아직 등록되지 않았을 때, upsert_job_posting 전에 호출한다.
+        (upsert_job_posting은 company_name이 companies.name과 정확히 일치해야 저장된다.)
+      - 이미 등록된 회사면 list_companies로 확인한 정확한 이름을 그대로 쓰고, 이 tool은
+        다시 호출하지 않는다. 같은 회사를 다른 표기(예: '현대자동차' vs '현대(현대자동차)')로
+        등록하면 중복 회사가 생긴다.
+
+    주의: name이 같으면 portal_url, access_method, notes를 전달한 값으로 덮어쓴다.
+      기본값으로 재호출하면 기존 access_method가 'unknown', notes가 null로 지워진다.
+      industry만 null일 때 기존 값을 유지한다.
+
+    Args:
+      name: 공고를 낸 실제 회사명. 사람인·잡코리아·원티드·리멤버·피플앤잡 등 공고를
+        발견한 채용 플랫폼 이름은 넣지 않는다.
+      portal_url: 그 회사의 자체 채용 포털 URL. 모르면 회사 공식 홈페이지 URL을 넣는다.
+        채용 플랫폼의 공고 URL은 넣지 않는다(공고 URL은 upsert_job_posting의 url에 넣는다).
+      access_method: portal_url을 열어 공고를 읽을 수 있는 방식. 다음 중 하나:
+        static_html(정적 HTML로 공고 확인 가능), js_rendered(JS 렌더링 필요),
+        robots_blocked(robots.txt 차단), server_error(서버 오류), api_error(API 오류),
+        unknown(직접 확인하지 않음). 채용 플랫폼에서 공고를 찾았다는 정보는 넣지 않는다.
+      notes: 포털 접근 시 참고할 메모(상세 URL 패턴, 필터링 조건 등). 없으면 생략.
+      industry: 회사 산업 분류(예: '금융(은행)', 'IT서비스'). 모르면 생략.
+
+    Returns:
+      {"id": 회사 id, "name": 회사명}
+    """
     p = await pool()
     row = await p.fetchrow(
         """INSERT INTO companies (name, portal_url, access_method, notes, industry)

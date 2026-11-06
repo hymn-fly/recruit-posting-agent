@@ -264,6 +264,20 @@
 
 ---
 
+## 2026-11-06
+
+### #27 `upsert_company` tool description 명확화
+- **무엇을**: `upsert_company` docstring(=MCP tool description)을 언제 호출하는지, 덮어쓰기 주의점, 인자별 의미(Args), 반환값으로 나눠 다시 썼다. `daily_ingest.md` 목표에도 채용 플랫폼(사람인·잡코리아 등)을 회사로 등록하지 않는다는 규칙을 넣었다.
+- **왜**: 기존 설명("회사/포털 메타데이터를 등록하거나 갱신한다")은 아래 내용을 알려주지 않았다.
+  - 공고 파싱 중 `upsert_job_posting` 전에 호출해야 하는 tool이라는 점
+  - 이미 등록된 회사는 `list_companies`의 정확한 이름을 다시 써야 한다는 점 (다른 표기로 쓰면 중복 회사가 생긴다)
+  - 채용 플랫폼 공고 URL을 `portal_url`에 넣으면 안 된다는 점
+  - 재호출하면 `access_method`/`notes`가 기본값으로 덮어써진다는 점 (`ON CONFLICT DO UPDATE`)
+- **변경**: `mcp_server/server.py`(`upsert_company` docstring), `prompts/daily_ingest.md`(목표 문단)
+- **검증**: `server.py` 구문 파싱 확인, docstring에서 언급한 `list_companies` tool이 있는지 확인. 동작 코드는 바꾸지 않았다.
+
+---
+
 ## 미해결 / 다음 후보
 - Gemma가 거의 항상 타임아웃 → 서킷 브레이커로 낭비는 줄였지만(#15), 기본 모델 교체 검토는 여전히 필요
 - id 48 `RX 기술 리더(팀장)`의 AI 관련성 점검 및 1차 필터의 재현율 점검(현대오토에버 목록에서 빠진 AI 공고가 없는지)
