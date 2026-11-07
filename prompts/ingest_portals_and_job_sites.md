@@ -29,7 +29,7 @@
    - access_method가 unknown이면 이번에 접근해 본 결과(static_html / js_rendered / robots_blocked / server_error / api_error)로 upsert_company를 갱신하고, 상세 URL 형식 등 다음 실행에 필요한 내용을 notes에 덧붙입니다.
    - 두 경우 모두 위 "upsert_company 덮어쓰기" 규칙대로 기존 값을 함께 넘깁니다.
 3. 목록 단계에서 명백히 제외할 공고는 record_filtered_postings(stage "list")로 회사당 한 번 기록합니다.
-4. 이미 저장된 URL은 JD를 다시 읽지 않고 touch_postings만 호출합니다.
+4. 이미 저장된 URL은 JD를 다시 읽지 않고 touch_postings(site_url=portal_url, urls)만 호출합니다.
 5. 새 후보는 상세 페이지의 JD를 읽고 upsert_job_posting으로 저장합니다. JD를 읽고 제외한 공고는 record_filtered_postings(stage "detail")에 사유와 함께 기록합니다.
 6. 회사마다 record_scrape_run(source=portal_url, status=ok | failed | unverifiable, detail)로 마무리합니다. detail은 "후보 N건 / 신규 저장 M건 / 기존 갱신 K건 / 목록 단계 제외 J건 / JD 확인 후 제외 L건" 형식으로 쓰고, 확인하지 못한 범위가 있으면 한 줄 덧붙입니다.
 7. 한 회사가 실패해도 다음 회사로 넘어갑니다.
@@ -62,7 +62,7 @@
   - notes: "{사이트명} 공고로 처음 발견(날짜). 자사 채용 페이지 확인 필요" 등 확인한 사실만 적습니다. portal_url을 채용 사이트 회사 페이지로 임시 지정했으면 그 사실도 적습니다.
 
 중복 처리
-- 목록에서 후보 URL을 모은 뒤, 사이트마다 list_known_urls(site_url=사이트 링크, candidate_urls=후보 URL들)와 list_filtered_urls(같은 인자)를 한 번씩 호출합니다. 돌려받은 URL이 이미 본 공고입니다. 저장된 URL이면 touch_postings(company_name=실제 회사명, urls)만 호출하고(회사별로 묶어서), 필터된 URL이면 건너뜁니다. 회사 등록 여부와 상관없이 동작합니다.
+- 목록에서 후보 URL을 모은 뒤, 사이트마다 list_known_urls(site_url=사이트 링크, candidate_urls=후보 URL들)와 list_filtered_urls(같은 인자)를 한 번씩 호출합니다. 돌려받은 URL이 이미 본 공고입니다. 저장된 URL이면 touch_postings(site_url=사이트 링크, urls)만 호출하고(회사별로 나눌 필요 없이 한 번에), 필터된 URL이면 건너뜁니다. 회사 등록 여부와 상관없이 동작합니다.
 - 같은 공고가 자사 사이트나 다른 채용 사이트에서 이미 저장됐을 수 있습니다. 새 후보를 저장하기 전에 find_active_postings_by_company_and_title(company_name=실제 회사명, title_keywords=[제목의 핵심 직무어])로 확인하고, 같은 공고(같은 직무·같은 팀/조직)가 활성 상태로 있으면 저장하지 않고 "중복 건너뜀"으로 셉니다.
 - JD를 읽고 제외한 공고는 record_filtered_postings(company_name=실제 회사명, stage "detail")로 기록합니다(회사가 미등록이면 기록하지 않고 보고에만 적습니다). 목록 단계에서 제외한 공고는 개별 기록하지 않아도 됩니다(채용 사이트는 비AI 공고가 너무 많음).
 
@@ -99,6 +99,7 @@
 - 두산: 개별 공고가 JS 모달이라 상세 URL이 없습니다. URL 없이 저장하지 않습니다. 두산 계열 공고가 사람인·잡코리아에 상세 URL과 함께 올라와 있으면 (B) 절차로 저장할 수 있습니다.
 
 ## 마무리
-- 적재가 끝나면 embed_pending_postings를 호출합니다. 결과의 remaining이 0보다 크면 0이 될 때까지 다시 호출합니다.
+- 적재가 끝나면 먼저 delete_expired_and_urlless_postings를 한 번 호출해 마감일이 지난 공고와 URL이 없는 공고를 지웁니다(아래 임베딩 대상이 줄어듭니다). 결과의 deleted·expired·url_missing 건수는 마무리 보고에 적습니다. 이 호출이 실패해도 다음 단계로 넘어갑니다.
+- 그다음 embed_pending_postings를 호출합니다. 결과의 remaining이 0보다 크면 0이 될 때까지 다시 호출합니다.
 - (A) 회사별 결과(ok/failed/unverifiable), (B) 사이트별 집계와 새로 저장한 공고 제목(회사명 포함)을 짧게 보고합니다. 끝까지 처리하지 못한 항목이 있으면 이름과 이유를 적습니다.
 - 새 공고를 저장했거나 실행이 막힌 경우(접근 거부, 도구 오류)에는 PushNotification으로 요약을 보냅니다. 변화가 없으면 보내지 않습니다.

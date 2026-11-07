@@ -1,7 +1,7 @@
-"""mcp_server.server의 사이트 호스트 정규화(normalize_site_host) 단위 테스트. list_known_urls/list_filtered_urls의 비교 기준이다."""
+"""mcp_server.collect_server의 사이트 호스트 정규화(normalize_site_host) 단위 테스트. list_known_urls/list_filtered_urls의 비교 기준이다."""
 import pytest
 
-from mcp_server.server import POSTING_URL_HOST_SQL, normalize_site_host
+from mcp_server.collect_server import POSTING_URL_HOST_SQL, normalize_site_host
 
 
 @pytest.mark.parametrize("site_url, expected_host", [

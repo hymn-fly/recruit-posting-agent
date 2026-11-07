@@ -1,7 +1,7 @@
 """조회·분석용 MCP 서버(job-query): 공고 검색, 공고 상세, 회사 리서치 캐시.
 
 대화형 에이전트(agents/)가 쓰고, 적재(예약 작업)용 job-db에는 노출하지 않는다.
-공고 적재·크롤링 기록 tool은 server.py(job-db)에 있다.
+공고 적재·크롤링 기록 tool은 collect_server.py(job-db)에 있다.
 """
 import asyncio
 import json

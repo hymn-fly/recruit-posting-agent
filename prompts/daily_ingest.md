@@ -27,7 +27,7 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
    각 item: `{"title", "stage": "list", "reason": 제외 이유 한 줄, "url", "location"}` (url/location은 있으면).
    (이미 걸러진 공고를 다시 평가하지 않도록 먼저 `list_filtered_urls(site_url=portal_url)`로 기록된 URL을 가져와 제외하고 시작한다.)
 4. `list_known_urls(site_url=portal_url)`로 이미 저장된 URL을 가져온다.
-   - 이미 저장된 후보는 JD를 **다시 읽지 말고** 모아서 `touch_postings(company_name, urls)`로 한 번에 갱신한다.
+   - 이미 저장된 후보는 JD를 **다시 읽지 말고** 모아서 `touch_postings(site_url=portal_url, urls)`로 한 번에 갱신한다.
    - 새 후보만 링크를 열어 JD 본문을 읽는다.
 5. 새 후보마다 JD 본문 기준으로 AI 관련인지 다시 판단한다.
    - 아니면 저장하지 않고, 모아서 `record_filtered_postings`(`stage: "detail"`, reason에 JD 근거 한 줄)로 기록한다.
@@ -43,7 +43,8 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
    - `ok`: detail에 "후보 N건 / 신규 저장 M건 / 기존 갱신 K건 / 목록 단계 제외 J건 / JD 확인 후 제외 L건"
    - `failed`: 오류가 났을 때 사유
    - `unverifiable`: 위 2단계의 확인 불가 사유
-7. 모든 회사 처리가 끝나면 `embed_pending_postings()`를 호출해 새로 저장·변경된 공고를 임베딩한다
+7. 모든 회사 처리가 끝나면 먼저 `delete_expired_and_urlless_postings()`를 한 번 호출해 마감일이 지난 공고와 URL이 없는 공고를 지운다(임베딩 대상이 줄어든다).
+   그다음 `embed_pending_postings()`를 호출해 새로 저장·변경된 공고를 임베딩한다
    (RAG 검색용). 결과의 `remaining`이 0보다 크면 0이 될 때까지 다시 호출한다.
 
 ## 규칙
@@ -64,13 +65,13 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
     "job-db": {
       "command": "/opt/homebrew/bin/uv",
       "args": ["--directory", "/Users/gilgeun-o/Desktop/Projects/make-agents",
-               "run", "python", "mcp_server/server.py"]
+               "run", "python", "mcp_server/collect_server.py"]
     }
   }
 }
 ```
 
-- `server.py`가 프로젝트의 `.env`(`NEON_DATABASE_URL`)를 읽는다.
+- `collect_server.py`가 프로젝트의 `.env`(`NEON_DATABASE_URL`)를 읽는다.
 - 예약 작업은 컴퓨터가 켜져 있고 Claude Desktop이 실행 중일 때만 돈다.
 - 예약 작업에서 로컬 MCP 서버를 쓸 수 있는지는 처음에 `list_companies` 호출만 하는 작은 작업으로 먼저 확인한다.
 

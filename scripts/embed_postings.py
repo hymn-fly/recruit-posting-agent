@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mcp_server import server  # noqa: E402
+from mcp_server import collect_server  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.WARNING)
 async def main():
     total = 0
     while True:
-        res = await server.embed_pending(25)   # 공고당 최대 4개 텍스트 → 약 100건
+        res = await collect_server.embed_pending(25)   # 공고당 최대 4개 텍스트 → 약 100건
         total += res["embedded"]
         print(res)
         if not res["remaining"]:

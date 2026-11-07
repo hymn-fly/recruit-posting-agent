@@ -1,4 +1,4 @@
-"""적재용 MCP 서버(job-db): 회사·공고 저장, 크롤링 기록, 임베딩. 임의 SQL은 실행하지 않는다.
+"""수집용 MCP 서버(job-db): 회사·공고 저장, 크롤링 기록, 만료 공고 정리, 임베딩. 임의 SQL은 실행하지 않는다.
 
 Claude Desktop 예약 작업(수집 에이전트)이 쓴다. 공고 검색·상세·회사 리서치 캐시는 query_server.py(job-query)에 있다.
 """
@@ -159,15 +159,23 @@ async def list_known_urls(site_url: str, candidate_urls: Optional[list[str]] = N
 
 
 @mcp.tool()
-async def touch_postings(company_name: str, urls: list[str]) -> dict:
-    """이번에도 목록에서 확인된 기존 공고의 last_seen_at을 갱신한다 (JD 재파싱 없이)."""
+async def touch_postings(site_url: str, urls: list[str]) -> dict:
+    """이번에도 이 사이트의 목록에서 확인된 기존 공고의 last_seen_at을 갱신한다 (JD 재파싱 없이).
+
+    Args:
+      site_url: 크롤링하는 사이트 링크. list_known_urls와 같은 기준이다(회사명은 쓰지 않는다).
+      urls: 이번에 본 공고 URL들. 호스트가 site_url의 사이트에 속하는 저장된 공고만 갱신한다.
+        그래서 list_known_urls가 돌려준 URL을 회사별로 나눌 필요 없이 한 번에 넘기면 된다.
+    """
+    site_host = normalize_site_host(site_url)
     p = await pool()
-    async with p.acquire() as conn:
-        cid = await get_company_id_by_name(conn, company_name)
-        res = await conn.execute(
-            """UPDATE job_postings SET last_seen_at = now(), is_active = true
-               WHERE company_id = $1 AND url = ANY($2::text[])""",
-            cid, urls)
+    res = await p.execute(
+        f"""UPDATE job_postings SET last_seen_at = now(), is_active = true
+            WHERE id IN (
+                SELECT id FROM (SELECT id, {POSTING_URL_HOST_SQL} AS host
+                                FROM job_postings WHERE url = ANY($2::text[])) seen
+                WHERE host = $1 OR right(host, length($1) + 1) = '.' || $1)""",
+        site_host, urls)
     return {"updated": int(res.split()[-1])}
 
 
@@ -313,6 +321,42 @@ async def embed_pending(limit: int = 100) -> dict:
                WHERE id = $1""",
             params)
     return {"embedded": len(todo), "remaining": remaining}
+
+
+async def delete_expired_and_urlless_postings_in(conn) -> list[dict]:
+    """마감일이 오늘(한국 시간) 이전인 공고와 URL이 없는 공고를 지우고, 지운 공고를 돌려준다."""
+    rows = await conn.fetch(
+        """DELETE FROM job_postings j
+           USING companies c
+           WHERE c.id = j.company_id
+             AND ((j.deadline IS NOT NULL AND j.deadline < (now() AT TIME ZONE 'Asia/Seoul')::date)
+                  OR j.url IS NULL OR btrim(j.url) = '')
+           RETURNING j.id, c.name AS company, j.title, j.url, j.deadline,
+                     CASE WHEN j.url IS NULL OR btrim(j.url) = '' THEN 'url_missing' ELSE 'expired' END AS reason""")
+    return [{**dict(r), "deadline": r["deadline"].isoformat() if r["deadline"] else None} for r in rows]
+
+
+@mcp.tool()
+async def delete_expired_and_urlless_postings() -> dict:
+    """마감일이 지난 공고와 URL이 비어 있는 공고를 job_postings에서 삭제한다. 수집이 모두 끝난 뒤 한 번 호출한다.
+
+    - 만료: deadline이 오늘(한국 시간)보다 이전인 공고. 마감일이 오늘이면 아직 열려 있으므로 남긴다.
+      deadline이 비어 있는 공고(상시채용 등)는 만료로 보지 않는다.
+    - URL 없음: url이 NULL이거나 공백뿐인 공고. URL이 없으면 이후 갱신·중복 확인이 안 된다.
+    삭제는 되돌릴 수 없다. 이 공고를 분석 기준으로 쓴 회사 리서치(company_research)는 posting_id만 비워지고 남는다.
+    임베딩 대상이 줄도록 embed_pending_postings보다 먼저 호출한다.
+
+    Returns:
+      {"deleted": 삭제 건수, "expired": 만료로 지운 건수, "url_missing": URL 없어서 지운 건수,
+       "postings": [{"id", "company", "title", "url", "deadline", "reason"}]}
+    """
+    p = await pool()
+    async with p.acquire() as conn, conn.transaction():
+        deleted_postings = await delete_expired_and_urlless_postings_in(conn)
+    return {"deleted": len(deleted_postings),
+            "expired": sum(1 for posting in deleted_postings if posting["reason"] == "expired"),
+            "url_missing": sum(1 for posting in deleted_postings if posting["reason"] == "url_missing"),
+            "postings": deleted_postings}
 
 
 @mcp.tool()

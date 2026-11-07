@@ -9,7 +9,7 @@
 ## 하루 요청 예산
 - 상세 JD 조회는 두 사이트 합쳐 하루 최대 30건입니다. 링크드인은 최대 15건, 원티드는 30건에서 링크드인 예정분을 뺀 만큼(최대 20건) 씁니다.
 - 검색(목록) 요청은 원티드 최대 14회(검색어 7개 × 2페이지), 링크드인 최대 7회(검색어 7개 × 1회)입니다.
-- 이미 DB에 있는 URL은 상세를 다시 읽지 않습니다. touch_postings(company_name, urls)로 last_seen만 갱신합니다.
+- 이미 DB에 있는 URL은 상세를 다시 읽지 않습니다. touch_postings(site_url, urls)로 last_seen만 갱신합니다.
 - 예산을 넘는 후보는 최신 공고부터 처리하고, 남은 후보 수는 record_scrape_run detail과 마무리 보고에 적습니다.
 - 모든 요청 사이에 1초 이상 간격을 둡니다(링크드인은 1.5초 이상).
 
@@ -61,7 +61,7 @@
 - 상세 URL이 없으면 저장하지 않습니다.
 
 ## 중복 처리
-- 사이트(원티드 `https://www.wanted.co.kr`, 링크드인 `https://www.linkedin.com`)마다, 목록에서 모은 후보 URL을 candidate_urls로 넘겨 list_known_urls(site_url, candidate_urls)와 list_filtered_urls(같은 인자)를 한 번씩 호출합니다. 돌려받은 URL이 이미 본 공고입니다. 저장된 URL이면 touch_postings(company_name=실제 회사명, urls)만 호출하고(회사별로 묶어서, 상세 조회 예산을 쓰지 않음), 필터된 URL이면 건너뜁니다. 회사 등록 여부와 상관없이 동작합니다.
+- 사이트(원티드 `https://www.wanted.co.kr`, 링크드인 `https://www.linkedin.com`)마다, 목록에서 모은 후보 URL을 candidate_urls로 넘겨 list_known_urls(site_url, candidate_urls)와 list_filtered_urls(같은 인자)를 한 번씩 호출합니다. 돌려받은 URL이 이미 본 공고입니다. 저장된 URL이면 touch_postings(site_url, urls)만 호출하고(회사별로 나눌 필요 없이 한 번에, 상세 조회 예산을 쓰지 않음), 필터된 URL이면 건너뜁니다. 회사 등록 여부와 상관없이 동작합니다.
 - 같은 공고가 다른 사이트(자사 사이트·사람인·잡코리아·리멤버·피플앤잡 등)에 이미 저장됐을 수 있습니다. 새 후보의 상세를 읽기 전에 find_active_postings_by_company_and_title(company_name=실제 회사명, title_keywords=[제목의 핵심 직무어])로 확인합니다. 같은 직무·같은 팀의 활성 공고가 있으면 상세를 읽지 않고 "중복 건너뜀"으로 셉니다.
 - JD를 읽고 제외한 공고는 record_filtered_postings(company_name=실제 채용 회사명, stage "detail")에 사유와 함께 기록합니다. 회사가 미등록이거나 회사를 알 수 없는 헤드헌팅 공고는 기록하지 않고 마무리 보고에 적습니다.
 
@@ -72,5 +72,6 @@
 - 사이트마다 record_scrape_run(source=사이트 링크, status, detail)을 한 번 호출합니다. 회사별로 호출하지 않습니다.
   - status: 끝까지 확인했으면 ok(예산 초과로 미룬 후보가 있어도 ok), 차단·CAPTCHA·로그인 필요·중단 조건이면 unverifiable, 도구 오류면 failed
   - detail: "후보 N건 / 신규 저장 M건 / 기존 갱신 K건 / 중복 건너뜀 D건 / JD 확인 후 제외 L건 / 판단 불가 U건 / 신규 회사 등록 C건"에, 미룬 후보 수나 중단 사유를 한 줄 덧붙입니다.
-- 적재가 끝나면 embed_pending_postings를 호출합니다. 결과의 remaining이 0보다 크면 0이 될 때까지 다시 호출합니다.
+- 적재가 끝나면 먼저 delete_expired_and_urlless_postings를 한 번 호출해 마감일이 지난 공고와 URL이 없는 공고를 지웁니다(아래 임베딩 대상이 줄어듭니다). 결과의 deleted·expired·url_missing 건수는 마무리 보고에 적습니다. 이 호출이 실패해도 다음 단계로 넘어갑니다.
+- 그다음 embed_pending_postings를 호출합니다. 결과의 remaining이 0보다 크면 0이 될 때까지 다시 호출합니다.
 - 사이트별 집계, 새로 저장한 공고 제목(회사명 포함), 제외·판단 불가 목록, 끝까지 처리하지 못한 항목과 이유를 짧게 보고합니다.

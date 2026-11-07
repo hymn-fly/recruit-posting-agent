@@ -35,7 +35,7 @@ make-agents/
 | 파일 | 역할 |
 |---|---|
 | `db.py` | 서버들이 공유하는 DB 코드: `.env` 로딩, 커넥션 풀 `pool()`, `lifespan`, 회사명→id `get_company_id_by_name()` |
-| `server.py` | **`job-db`** MCP 서버(적재 전용, 예약 작업이 씀). 회사·공고(`upsert_company`, `upsert_job_posting`, `list_companies`, `touch_postings`, `find_active_postings_by_company_and_title`), 본 공고 확인(`list_known_urls`, `list_filtered_urls`: **사이트 URL 기준**), 필터 기록(`record_filtered_postings`), 크롤링 기록(`record_scrape_run`, `list_latest_scrape_status_by_source`), 임베딩(`embed_pending_postings`) |
+| `collect_server.py` | **`job-db`** MCP 서버(공고 수집 전용, 예약 작업이 씀). 회사·공고(`upsert_company`, `upsert_job_posting`, `list_companies`, `find_active_postings_by_company_and_title`), 본 공고 확인·갱신(`list_known_urls`, `list_filtered_urls`, `touch_postings`: **사이트 URL 기준**), 필터 기록(`record_filtered_postings`), 크롤링 기록(`record_scrape_run`, `list_latest_scrape_status_by_source`), 정리(`delete_expired_and_urlless_postings`: 마감 지난 공고·URL 없는 공고 삭제), 임베딩(`embed_pending_postings`) |
 | `query_server.py` | **`job-query`** MCP 서버(조회·분석 전용, 대화형 에이전트가 씀). 검색(`semantic_search_jobs`), 공고 상세(`get_job_posting`), 리서치 캐시(`get_cached_research`, `save_research`). 예약 작업에는 등록하지 않음 |
 | `profile_server.py` | **`profile-db`** MCP 서버. 개인 자료 읽기 전용(`get_profile_summary`, `search_profile`, `list_profile_documents`). 예약 작업에는 등록하지 않아 이력서가 노출되지 않음 |
 | `embeddings.py` | Gemini 임베딩(768차원) `embed_documents`/`embed_query`, 무료 티어 대응 배치·재시도, pgvector 변환, 해시 |
@@ -93,7 +93,7 @@ flowchart LR
     end
 
     subgraph MCP["MCP 서버 (mcp_server/)"]
-        JDB["job-db<br/>server.py (적재)"]
+        JDB["job-db<br/>collect_server.py (수집)"]
         JQ["job-query<br/>query_server.py (조회)"]
         PDB["profile-db<br/>profile_server.py"]
     end
@@ -146,7 +146,7 @@ sequenceDiagram
             CD->>JDB: list_filtered_urls / list_known_urls (site_url=portal_url)
             Note over CD: 제목·직군으로 AI 공고 후보만 추림
             CD->>JDB: record_filtered_postings(stage=list)
-            CD->>JDB: touch_postings(이미 저장된 URL)
+            CD->>JDB: touch_postings(site_url, 이미 저장된 URL)
             loop 새 후보마다
                 CD->>Web: 공고 상세(JD) 읽기
                 alt JD 기준 AI 공고
@@ -158,6 +158,8 @@ sequenceDiagram
             CD->>JDB: record_scrape_run(portal_url, ok, 건수 요약)
         end
     end
+    CD->>JDB: delete_expired_and_urlless_postings()
+    JDB->>DB: DELETE 마감 지난 공고, URL 없는 공고
     CD->>JDB: embed_pending_postings()
     JDB->>DB: embedding 없거나 본문이 바뀐 공고 조회
     JDB->>GEM: 공고 텍스트 임베딩 (768차원)

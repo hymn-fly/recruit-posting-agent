@@ -321,6 +321,17 @@
   - **Claude Desktop 예약 작업의 프롬프트를 다시 붙여 넣어야 한다.** 옛 프롬프트의 `list_known_urls(company_name=...)`는 새 서버에서 실패한다. `job-db` 이름과 설정 파일은 그대로다.
   - `touch_postings`는 아직 `company_name` 기준이다. 사이트 기준으로 바꾸는 것은 후속 후보.
 
+### #31 `server.py`를 `collect_server.py`로 이름 변경, `touch_postings` 사이트 기준화, 만료·URL 없는 공고 삭제 tool 추가
+- **무엇을**:
+  - `mcp_server/server.py` → `mcp_server/collect_server.py`(`git mv`). 서버 이름(`job-db`)은 그대로다. `agents/mcp_client.py`, `scripts/embed_postings.py`, 테스트, README, `prompts/daily_ingest.md`의 Claude Desktop 설정 예시가 새 경로를 가리킨다.
+  - `touch_postings(company_name, urls)` → `touch_postings(site_url, urls)`. `list_known_urls`와 같은 호스트 규칙으로, 호스트가 site_url의 사이트에 속하는 저장된 공고만 갱신한다. 회사별로 URL을 나눠 호출할 필요가 없다.
+  - 새 tool `delete_expired_and_urlless_postings()`: `deadline`이 오늘(한국 시간)보다 이전인 공고와 `url`이 NULL/공백인 공고를 삭제하고 건수와 삭제 목록을 돌려준다. 마감일이 오늘이거나 비어 있는(상시채용) 공고는 남긴다.
+  - 수집 프롬프트 3개: `touch_postings` 호출을 사이트 기준으로 바꾸고, 마무리에서 `delete_expired_and_urlless_postings` → `embed_pending_postings` 순서로 한 번씩 호출하게 했다. 삭제를 임베딩보다 먼저 하는 이유는 곧 지워질 공고를 임베딩하지 않기 위해서다.
+- **왜**: 이 서버의 tool은 모두 공고 수집용이라 파일 이름이 역할을 드러내게 했다. `list_known_urls`를 사이트 기준으로 바꾼 뒤에도 `touch_postings`만 회사 기준이라, 사이트에서 읽은 URL을 회사별로 나눠야 했고 회사명 표기가 다르면 오류가 났다. 만료·URL 없는 공고는 검색 결과를 오염시키고 URL이 없는 행은 갱신·중복 확인이 안 되는데 지울 도구가 없었다.
+- **변경**: `mcp_server/collect_server.py`(이름 변경 + 위 변경), `mcp_server/query_server.py`(docstring), `agents/mcp_client.py`, `scripts/embed_postings.py`, `tests/unit_tests/test_site_host.py`, `prompts/*.md` 3개, `README.md`
+- **검증**: 실제 Neon에서 트랜잭션 안에서 실행하고 롤백했다. 삭제 tool은 336건 중 14건(만료 11, URL 없음 3)을 대상으로 잡았고 롤백 후 336건으로 복구됐다. 만료 12건 중 1건은 URL도 없어 "URL 없음"으로 분류된다. `company_research.posting_id`는 `ON DELETE SET NULL`이라 리서치 캐시는 남고, 끊어진 참조도 없었다. `touch_postings`는 사람인 URL 14건을 `saramin.co.kr`로 호출하면 14건 갱신, `jobkorea.co.kr`로 호출하면 0건이었다. `uv run pytest` 29 passed / 5 skipped, ruff 통과.
+- **주의**: 삭제 tool은 아직 실제 DB에 실행하지 않았다. 다음 예약 작업이 처음 돌 때 위 14건이 지워진다. Claude Desktop 설정(`claude_desktop_config.json`)의 `args`를 `mcp_server/collect_server.py`로 고치고 재시작해야 하며, 수집 프롬프트 3개도 다시 붙여 넣어야 한다.
+
 ---
 
 ## 미해결 / 다음 후보
