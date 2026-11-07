@@ -3,10 +3,10 @@
 ## companies / scrape_runs 규칙 (가장 먼저 지킬 것)
 - companies 테이블에는 채용공고를 낸 실제 채용 회사만 저장합니다. 채용 사이트(사람인·잡코리아·리멤버·원티드·링크드인·피플앤잡 등)를 회사로 등록하지 않고, company_name에 채용 사이트 이름을 쓰지 않습니다.
 - 크롤링 결과는 record_scrape_run(source, status, detail)로 사이트 단위로 기록합니다. source에는 회사명이 아니라 크롤링한 사이트를 넣습니다.
-  - (A) 회사 자사 채용 사이트: source = 그 회사의 portal_url (이번 실행에서 고쳤으면 고친 값)
+  - (A) 회사 자사 채용 사이트: source = 그 회사의 portal_url 
   - (B) 채용 사이트: source = 사이트 링크. 사람인 `https://www.saramin.co.kr`, 잡코리아 `https://www.jobkorea.co.kr`, 리멤버 `https://career.rememberapp.co.kr`. 매번 이 문자열을 그대로 씁니다.
   - status: ok(끝까지 확인) | failed(도구·서버 오류) | unverifiable(JS 렌더링 불가, robots·403 차단, 로그인 필요, 접근 승인 없음 등으로 확인 불가)
-- upsert_company는 같은 name이면 portal_url, access_method, notes를 넘긴 값으로 덮어씁니다(기본값으로 호출하면 access_method가 unknown, notes가 비워짐). 이미 등록된 회사를 갱신할 때는 list_companies에서 읽은 기존 portal_url·access_method·notes·industry를 모두 넘기고, 바꿀 값만 고치며, notes는 기존 내용 뒤에 덧붙입니다.
+- 이미 등록된 회사를 갱신할 때는 list_companies에서 읽은 기존 portal_url·access_method·notes·industry를 모두 넘기고, 바꿀 값만 고치며, notes는 기존 내용 뒤에 덧붙입니다.
 
 ## 대상 공고
 - AI/ML/LLM/MLOps/데이터 사이언스·데이터 엔지니어링이 핵심 직무인 공고만 저장합니다.
@@ -23,7 +23,7 @@
 3. 마무리 보고를 합니다.
 
 ## (A) 회사별 절차
-1. list_filtered_urls와 list_known_urls를 먼저 호출합니다(인자는 company_name).
+1. list_filtered_urls(site_url=portal_url)와 list_known_urls(site_url=portal_url)를 먼저 호출합니다. 회사명이 아니라 크롤링하는 사이트 기준입니다.
 2. 회사의 portal_url에서 공고 목록을 읽습니다.
    - portal_url이 자사 채용 페이지가 아니면(회사 홈페이지, 또는 (B)에서 임시로 넣은 채용 사이트의 회사 페이지) 채용 사이트 페이지는 크롤링하지 않고, 자사 채용 페이지를 찾아 upsert_company로 portal_url을 고칩니다. 자사 채용 페이지가 없으면 notes에 "자사 채용 페이지 없음 — 채용 사이트로만 공고 확인"이라고 덧붙이고 unverifiable로 기록합니다.
    - access_method가 unknown이면 이번에 접근해 본 결과(static_html / js_rendered / robots_blocked / server_error / api_error)로 upsert_company를 갱신하고, 상세 URL 형식 등 다음 실행에 필요한 내용을 notes에 덧붙입니다.
@@ -48,10 +48,10 @@
 - 사람인: 검색 `/zf_user/search/recruit?searchword={검색어}&searchType=search&recruitPage={n}&recruitSort=reg_dt&recruitPageCount=40&loc_mcd=101000,102000`. 상세 URL은 `https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx={id}`로 저장하고, 본문은 `/zf_user/jobs/relay/view-detail?rec_idx={id}&rec_seq=0`에서 읽습니다.
 - 잡코리아: 검색 `/Search/?stext={검색어}&tabType=recruit&Page_No={n}&local=I000,B000&Ord=RegDtDesc`. 상세 URL은 `https://www.jobkorea.co.kr/Recruit/GI_Read/{id}`, 본문은 `/Recruit/GI_Read_Comt_Ifrm?Gno={id}`에서 읽습니다. 회사명은 상세 페이지 title("{회사명} 채용 - …")에서 가져옵니다.
 - 리멤버: 검색 결과가 JS로 렌더링되므로 브라우저에서 `/job/postings?search={"keywords":["검색어"]}`를 열고 `source=inweb_list` 링크만 후보로 씁니다(추천·광고 섹션 제외). 상세 URL은 `https://career.rememberapp.co.kr/job/posting/{id}`이고 같은 출처에서 fetch해 읽습니다.
-- 본문이 이미지뿐인 공고는 저장하지 않고 "미판정"으로 셉니다.
+- 본문이 이미지뿐인 공고는 이미지를 해석하여 텍스트로 바꾸어서 저장.
 
 저장 방법
-- company_name은 채용 사이트 이름이 아니라 실제 채용 회사명입니다. "(주)", "주식회사" 등은 떼고, list_companies에 이미 있는 회사는 그 이름을 그대로 씁니다. 표기가 달라 헷갈리면 semantic_search_jobs(company_name=회사명 일부)로 기존 이름을 확인합니다(부분일치).
+- company_name은 채용 사이트 이름이 아니라 실제 채용 회사명입니다. "(주)", "주식회사" 등은 떼고, list_companies에 이미 있는 회사는 그 이름을 그대로 씁니다. 표기가 달라 헷갈리면 list_companies 결과에서 비슷한 이름을 찾아 기존 이름을 씁니다.
 - url은 위 형식으로 정규화한 상세 공고 URL입니다(추적용 쿼리 제거).
 - source_snapshot에 "채용 사이트: {사이트명}"을 적고, JD 일부만 읽었거나 목록에서만 얻은 정보면 그 사실도 적습니다.
 - 회사가 companies에 없으면(upsert_job_posting이 "등록되지 않은 회사"로 실패하면) 그 회사를 등록한 뒤 다시 저장합니다. 이미 등록된 회사에는 upsert_company를 호출하지 않습니다(기존 notes·access_method가 덮어써짐).
@@ -62,8 +62,8 @@
   - notes: "{사이트명} 공고로 처음 발견(날짜). 자사 채용 페이지 확인 필요" 등 확인한 사실만 적습니다. portal_url을 채용 사이트 회사 페이지로 임시 지정했으면 그 사실도 적습니다.
 
 중복 처리
-- 채용 회사별로 list_known_urls와 list_filtered_urls를 한 번씩 호출해 결과를 재사용합니다. 이미 있는 URL이면 touch_postings(company_name=실제 회사명)만 호출하고, 필터된 URL이면 건너뜁니다. 두 도구가 "등록되지 않은 회사" 오류를 내면 처음 보는 회사이므로 빈 목록으로 간주합니다.
-- 같은 공고가 자사 사이트나 다른 채용 사이트에서 이미 저장됐을 수 있습니다. 새 후보를 저장하기 전에 semantic_search_jobs(company_name=실제 회사명, title_keywords=[제목의 핵심 직무어])로 확인하고, 같은 공고(같은 직무·같은 팀/조직)가 활성 상태로 있으면 저장하지 않고 "중복 건너뜀"으로 셉니다.
+- 목록에서 후보 URL을 모은 뒤, 사이트마다 list_known_urls(site_url=사이트 링크, candidate_urls=후보 URL들)와 list_filtered_urls(같은 인자)를 한 번씩 호출합니다. 돌려받은 URL이 이미 본 공고입니다. 저장된 URL이면 touch_postings(company_name=실제 회사명, urls)만 호출하고(회사별로 묶어서), 필터된 URL이면 건너뜁니다. 회사 등록 여부와 상관없이 동작합니다.
+- 같은 공고가 자사 사이트나 다른 채용 사이트에서 이미 저장됐을 수 있습니다. 새 후보를 저장하기 전에 find_active_postings_by_company_and_title(company_name=실제 회사명, title_keywords=[제목의 핵심 직무어])로 확인하고, 같은 공고(같은 직무·같은 팀/조직)가 활성 상태로 있으면 저장하지 않고 "중복 건너뜀"으로 셉니다.
 - JD를 읽고 제외한 공고는 record_filtered_postings(company_name=실제 회사명, stage "detail")로 기록합니다(회사가 미등록이면 기록하지 않고 보고에만 적습니다). 목록 단계에서 제외한 공고는 개별 기록하지 않아도 됩니다(채용 사이트는 비AI 공고가 너무 많음).
 
 사이트별 마무리

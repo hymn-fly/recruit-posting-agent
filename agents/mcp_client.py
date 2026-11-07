@@ -16,6 +16,11 @@ def make_client() -> MultiServerMCPClient:
             "args": [str(ROOT / "mcp_server" / "server.py")],
             "transport": "stdio",
         },
+        "job-query": {
+            "command": sys.executable,
+            "args": [str(ROOT / "mcp_server" / "query_server.py")],
+            "transport": "stdio",
+        },
         "profile-db": {
             "command": sys.executable,
             "args": [str(ROOT / "mcp_server" / "profile_server.py")],

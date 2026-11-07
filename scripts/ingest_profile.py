@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mcp_server import server as db  # noqa: E402
+from mcp_server import db  # noqa: E402
 from mcp_server.embeddings import embed_documents, text_hash, to_pg  # noqa: E402
 from agents.llm import LLM  # noqa: E402
 from agents.state import ProfileSummary  # noqa: E402

@@ -25,8 +25,8 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
 3. 목록에서 AI 관련 후보만 추린다 (제목·직군 기준, 애매하면 후보에 포함).
    후보에서 **제외한 공고는 버리지 말고** 모아서 `record_filtered_postings(company_name, items)`를 회사당 **한 번**만 호출해 기록한다.
    각 item: `{"title", "stage": "list", "reason": 제외 이유 한 줄, "url", "location"}` (url/location은 있으면).
-   (이미 걸러진 공고를 다시 평가하지 않도록 먼저 `list_filtered_urls(company_name)`로 기록된 URL을 가져와 제외하고 시작한다.)
-4. `list_known_urls(company_name)`로 이미 저장된 URL을 가져온다.
+   (이미 걸러진 공고를 다시 평가하지 않도록 먼저 `list_filtered_urls(site_url=portal_url)`로 기록된 URL을 가져와 제외하고 시작한다.)
+4. `list_known_urls(site_url=portal_url)`로 이미 저장된 URL을 가져온다.
    - 이미 저장된 후보는 JD를 **다시 읽지 말고** 모아서 `touch_postings(company_name, urls)`로 한 번에 갱신한다.
    - 새 후보만 링크를 열어 JD 본문을 읽는다.
 5. 새 후보마다 JD 본문 기준으로 AI 관련인지 다시 판단한다.

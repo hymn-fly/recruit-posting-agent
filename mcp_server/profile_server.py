@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mcp_server import server as db  # noqa: E402  (pool, .env 로딩 재사용)
+from mcp_server import db  # noqa: E402  (pool, .env 로딩 재사용)
 from mcp_server.embeddings import embed_query, to_pg  # noqa: E402
 
 

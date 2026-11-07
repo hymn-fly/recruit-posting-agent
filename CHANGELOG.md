@@ -306,6 +306,21 @@
 - **검증**: 프롬프트에서 부르는 tool 이름과 인자(`record_scrape_run(source)`, `list_known_urls`, `list_filtered_urls`, `touch_postings`, `record_filtered_postings`, `semantic_search_jobs(company_name 부분일치, title_keywords)`, `embed_pending_postings`의 remaining)를 `server.py`와 대조했다. 실제 예약 실행은 하지 않았다.
 - **참고**: `prompts/daily_ingest.md`는 (A)만 다루는 이전 버전이다.
 
+### #30 `list_known_urls`/`list_filtered_urls`를 사이트 기준으로 바꾸고, MCP 서버를 적재(job-db)와 조회(job-query)로 분리
+- **무엇을**:
+  - `list_known_urls(company_name)`, `list_filtered_urls(company_name)` → `(site_url, candidate_urls=None)`. 공고 URL의 호스트(소문자, `www.` 제거, 하위 도메인 포함)가 `site_url`의 사이트와 같은 공고를 돌려준다. 회사 등록 여부와 무관하므로 "등록되지 않은 회사" 오류가 없다. `candidate_urls`를 주면 그중 이미 있는 것만 돌려줘서, 저장된 공고가 많은 채용 사이트에서도 응답이 길어지지 않는다.
+  - `mcp_server/query_server.py`(`job-query`) 신규: `semantic_search_jobs`, `get_job_posting`, `get_cached_research`, `save_research`를 옮겼다(코드는 그대로). `job-db`(server.py)에는 적재 tool과 `embed_pending_postings`가 남는다. `agents/mcp_client.py`에 `job-query`를 추가했다.
+  - `mcp_server/db.py` 신규: `.env` 로딩, 커넥션 풀, `lifespan`, `get_company_id_by_name`(구 `_company_id`). `profile_server.py`와 `scripts/ingest_profile.py`가 `server.py` 대신 이걸 쓴다.
+  - 새 tool `find_active_postings_by_company_and_title(company_name, title_keywords)`: 수집 프롬프트가 중복 확인에 `semantic_search_jobs`를 쓰고 있었는데 그 tool이 `job-query`로 가서 대신 둔 임베딩 없는 가벼운 조회.
+- **왜**: 이미 본 URL·걸러낸 URL을 확인하는 목적은 "이 사이트에서 무엇을 봤는가"이지 회사별이 아니다. 같은 회사 공고가 자사 사이트·사람인·원티드에 따로 올라오므로, 회사 기준이면 사이트마다 같은 URL 목록이 섞이고 미등록 회사에서는 오류가 났다. 조회·분석 tool은 적재와 관계가 없어서, 예약 작업(Claude Desktop)에는 적재 서버만 등록하도록 분리했다.
+- **변경**: `mcp_server/server.py`, `mcp_server/query_server.py`(신규), `mcp_server/db.py`(신규), `mcp_server/profile_server.py`, `agents/mcp_client.py`, `scripts/ingest_profile.py`, `tests/unit_tests/test_search_filters.py`, `tests/unit_tests/test_site_host.py`(신규), `prompts/*.md` 3개, `README.md`
+- **검증**: 실제 Neon에서 읽기 전용으로 확인. 사이트별 조회 건수가 URL 호스트로 직접 센 값과 일치했다(사람인 14, 리멤버 59, 링크드인 58, 올리브영 17/필터 129). 도메인만 준 경우(`saramin.co.kr`)와 스킴 포함 경우가 같은 결과였고, `candidate_urls`로 부분집합만 돌려주는 것, 다른 사이트 URL을 후보로 줘도 제외되는 것을 확인했다. `mcp_client.get_tools()`로 세 서버가 stdio로 뜨고 tool 18개가 로딩되는 것을 확인했다. `uv run pytest` 29 passed / 5 skipped, `ruff F401,F811,F821,F841` 통과.
+- **알아둘 점**:
+  - 사이트 구분은 공고 URL의 호스트로 한다. DB 스키마는 바꾸지 않았다. 공고 URL이 포털 호스트와 다른 회사(예: 포털은 `ibk.incruit.com`, 공고는 `ibk3.incruit.com`)는 하위 도메인 규칙으로 일부만 잡히고, 못 잡으면 JD를 한 번 더 읽는 비용만 든다(저장은 URL 기준 upsert라 중복되지 않는다).
+  - URL이 없는 행(공고 3건, 필터 기록 105건)은 사이트를 알 수 없다. 원래도 URL 목록에는 안 나오던 행이다.
+  - **Claude Desktop 예약 작업의 프롬프트를 다시 붙여 넣어야 한다.** 옛 프롬프트의 `list_known_urls(company_name=...)`는 새 서버에서 실패한다. `job-db` 이름과 설정 파일은 그대로다.
+  - `touch_postings`는 아직 `company_name` 기준이다. 사이트 기준으로 바꾸는 것은 후속 후보.
+
 ---
 
 ## 미해결 / 다음 후보

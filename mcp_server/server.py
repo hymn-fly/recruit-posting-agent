@@ -1,44 +1,22 @@
-"""커스텀 MCP 서버: 정해진 tool만 노출하며 임의 SQL은 실행하지 않는다."""
-import asyncio
-import json
-import os
+"""적재용 MCP 서버(job-db): 회사·공고 저장, 크롤링 기록, 임베딩. 임의 SQL은 실행하지 않는다.
+
+Claude Desktop 예약 작업(수집 에이전트)이 쓴다. 공고 검색·상세·회사 리서치 캐시는 query_server.py(job-query)에 있다.
+"""
 import sys
-from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
-import asyncpg
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from mcp_server.embeddings import embed_documents, embed_query, text_hash, to_pg  # noqa: E402
-
-_pool: Optional[asyncpg.Pool] = None
+from mcp_server.db import get_company_id_by_name, lifespan, pool  # noqa: E402
+from mcp_server.embeddings import embed_documents, text_hash, to_pg  # noqa: E402
 
 # AI Engineer 관련으로 적재하는 직군. 이 밖의 category는 upsert_job_posting이 거부한다
 ALLOWED_CATEGORIES = ("AI Engineer", "ML Engineer", "LLM Engineer", "MLOps", "Data")
-
-
-async def pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool(os.environ["NEON_DATABASE_URL"], min_size=1, max_size=5)
-    return _pool
-
-
-@asynccontextmanager
-async def lifespan(_server):
-    await pool()
-    try:
-        yield
-    finally:
-        if _pool is not None:
-            await _pool.close()
-
 
 mcp = FastMCP("job-db", lifespan=lifespan)
 
@@ -47,11 +25,48 @@ def _date(value: Optional[str]) -> Optional[date]:
     return date.fromisoformat(value) if value else None
 
 
-async def _company_id(conn, company_name: str) -> int:
-    cid = await conn.fetchval("SELECT id FROM companies WHERE name = $1", company_name)
-    if cid is None:
-        raise ValueError(f"등록되지 않은 회사: {company_name} (먼저 upsert_company 호출)")
-    return cid
+def normalize_site_host(site_url: str) -> str:
+    """사이트 링크(또는 도메인)에서 사이트 비교용 호스트를 뽑는다. 소문자, 포트·경로 제외, 앞의 'www.' 제거.
+
+    'https://www.saramin.co.kr/zf_user/search' -> 'saramin.co.kr', 'Career.Oliveyoung.com' -> 'career.oliveyoung.com'
+    """
+    raw_site_url = (site_url or "").strip()
+    # 스킴 없이 도메인만 와도('saramin.co.kr') 호스트로 읽히게 한다
+    has_scheme_or_slashes = "://" in raw_site_url or raw_site_url.startswith("//")
+    parsed_url = urlparse(raw_site_url if has_scheme_or_slashes else f"//{raw_site_url}")
+    host = (parsed_url.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[len("www."):]
+    if not host:
+        raise ValueError(f"site_url에서 호스트를 읽을 수 없음: {site_url!r} (예: 'https://www.saramin.co.kr')")
+    return host
+
+
+# 공고 URL의 사이트 호스트(소문자, 'www.' 제거)를 뽑는 SQL 식. normalize_site_host와 같은 규칙이어야 한다
+POSTING_URL_HOST_SQL = r"regexp_replace(lower(substring(url FROM '^https?://([^/:?#]+)')), '^www\.', '')"
+
+
+async def fetch_urls_seen_on_site(table_name: str, site_url: str, candidate_urls: Optional[list[str]],
+                                  only_active: bool) -> list[str]:
+    """table_name 테이블에서, 호스트가 site_url의 사이트(하위 도메인 포함)에 속하는 공고 URL을 돌려준다.
+
+    candidate_urls를 주면 그중 이미 있는 것만 돌려준다(전체 목록이 길어지는 채용 사이트용).
+    """
+    assert table_name in ("job_postings", "filtered_postings")   # 내부에서만 부르는 고정 값(SQL 식별자)
+    site_host = normalize_site_host(site_url)
+    active_condition = "AND is_active" if only_active else ""
+    p = await pool()
+    rows = await p.fetch(
+        f"""SELECT url FROM (
+                SELECT url, {POSTING_URL_HOST_SQL} AS host
+                FROM {table_name}
+                WHERE url IS NOT NULL {active_condition}
+                  AND ($2::text[] IS NULL OR url = ANY($2::text[]))
+            ) seen
+            WHERE host = $1 OR right(host, length($1) + 1) = '.' || $1
+            ORDER BY url""",
+        site_host, candidate_urls)
+    return [r["url"] for r in rows]
 
 
 @mcp.tool()
@@ -108,7 +123,7 @@ async def upsert_job_posting(company_name: str, title: str, url: Optional[str] =
         raise ValueError(f"category는 {ALLOWED_CATEGORIES} 중 하나여야 함: {category!r}")
     p = await pool()
     async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
+        cid = await get_company_id_by_name(conn, company_name)
         row = await conn.fetchrow(
             """INSERT INTO job_postings
                  (company_id, title, url, location, employment_type, min_years, category,
@@ -129,15 +144,18 @@ async def upsert_job_posting(company_name: str, title: str, url: Optional[str] =
 
 
 @mcp.tool()
-async def list_known_urls(company_name: str) -> list[str]:
-    """해당 회사의 활성 공고 URL 목록. 이미 적재된 공고는 JD를 다시 읽지 않고 건너뛰기 위해 쓴다."""
-    p = await pool()
-    async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
-        rows = await conn.fetch(
-            "SELECT url FROM job_postings WHERE company_id = $1 AND is_active AND url IS NOT NULL",
-            cid)
-    return [r["url"] for r in rows]
+async def list_known_urls(site_url: str, candidate_urls: Optional[list[str]] = None) -> list[str]:
+    """이 사이트에서 이미 저장해 둔 활성 공고의 URL 목록. 이미 저장된 공고의 JD를 다시 읽지 않으려고 쓴다.
+
+    Args:
+      site_url: 크롤링하는 사이트 링크. record_scrape_run의 source와 같은 값을 쓴다
+        (회사 자사 채용 사이트면 portal_url, 채용 플랫폼이면 'https://www.saramin.co.kr' 같은 사이트 링크).
+        공고 URL의 호스트가 이 사이트와 같거나 그 하위 도메인인 공고를 찾는다('www.'와 경로는 무시).
+        회사명은 쓰지 않는다: 같은 회사의 공고라도 사이트가 다르면 따로 센다.
+      candidate_urls: 이번 목록에서 본 후보 URL들. 주면 그중 이미 저장된 것만 돌려준다.
+        사람인·원티드처럼 저장된 공고가 많은 사이트는 전체 목록 대신 이 인자를 쓴다.
+    """
+    return await fetch_urls_seen_on_site("job_postings", site_url, candidate_urls, only_active=True)
 
 
 @mcp.tool()
@@ -145,7 +163,7 @@ async def touch_postings(company_name: str, urls: list[str]) -> dict:
     """이번에도 목록에서 확인된 기존 공고의 last_seen_at을 갱신한다 (JD 재파싱 없이)."""
     p = await pool()
     async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
+        cid = await get_company_id_by_name(conn, company_name)
         res = await conn.execute(
             """UPDATE job_postings SET last_seen_at = now(), is_active = true
                WHERE company_id = $1 AND url = ANY($2::text[])""",
@@ -170,7 +188,7 @@ async def record_filtered_postings(company_name: str, items: list[dict]) -> dict
         rows.append((title, it.get("url"), it.get("location"), stage, it.get("reason")))
     p = await pool()
     async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
+        cid = await get_company_id_by_name(conn, company_name)
         async with conn.transaction():
             await conn.executemany(
                 """INSERT INTO filtered_postings (company_id, title, url, location, stage, reason)
@@ -184,14 +202,13 @@ async def record_filtered_postings(company_name: str, items: list[dict]) -> dict
 
 
 @mcp.tool()
-async def list_filtered_urls(company_name: str) -> list[str]:
-    """이미 걸러낸 공고의 URL 목록. 같은 공고의 JD를 매번 다시 읽지 않기 위해 쓴다."""
-    p = await pool()
-    async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
-        rows = await conn.fetch(
-            "SELECT url FROM filtered_postings WHERE company_id = $1 AND url IS NOT NULL", cid)
-    return [r["url"] for r in rows]
+async def list_filtered_urls(site_url: str, candidate_urls: Optional[list[str]] = None) -> list[str]:
+    """이 사이트에서 이미 걸러낸(AI 공고가 아니라고 기록한) 공고의 URL 목록. 같은 공고의 JD를 매번 다시 읽지 않으려고 쓴다.
+
+    Args:
+      site_url, candidate_urls: list_known_urls와 같다.
+    """
+    return await fetch_urls_seen_on_site("filtered_postings", site_url, candidate_urls, only_active=False)
 
 
 SCRAPE_RUN_STATUSES = ("ok", "failed", "unverifiable")
@@ -242,10 +259,6 @@ async def list_latest_scrape_status_by_source() -> list[dict]:
            ORDER BY source, run_at DESC""")
     latest_runs = [{**dict(r), "run_at": r["run_at"].isoformat()} for r in rows]
     return sorted(latest_runs, key=lambda run: run["run_at"], reverse=True)
-
-
-def _row(r) -> dict:
-    return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in dict(r).items()}
 
 
 def _posting_text(r) -> str:
@@ -308,164 +321,30 @@ async def embed_pending_postings(limit: int = 100) -> dict:
     return await embed_pending(limit)
 
 
-# 의미 검색 질의 인자 → (비교할 컬럼별 임베딩, 결과에 붙일 유사도 키)
-FIELD_QUERY_TO_EMBEDDING = {
-    "q_responsibilities": ("embedding_responsibilities", "sim_responsibilities"),
-    "q_required": ("embedding_required", "sim_required"),
-    "q_preferred": ("embedding_preferred", "sim_preferred"),
-}
+@mcp.tool()
+async def find_active_postings_by_company_and_title(company_name: str,
+                                                    title_keywords: Optional[list[str]] = None) -> list[dict]:
+    """회사명과 제목 키워드로 이미 저장된 활성 공고를 찾는다. 같은 공고가 다른 사이트에서 이미 저장됐는지(중복) 확인하는 용도.
 
+    임베딩 없이 SQL 필터만 쓰므로 가볍다. 등록되지 않은 회사여도 오류 없이 빈 목록을 돌려준다.
 
-def build_posting_filter_conditions(title_keywords, company_name, category, location, max_years,
-                                    only_active) -> tuple[list[str], list]:
-    """WHERE로 확정할 수 있는 조건(SQL 조각, 바인딩 값)을 만든다. 값은 모두 $n 파라미터로 넘긴다."""
-    conditions, args = [], []
+    Args:
+      company_name: 회사명. 부분일치(대소문자 무시)라서 표기가 조금 달라도 찾는다.
+      title_keywords: 직무명 키워드(예: ["MLOps", "LLM"]). 제목에 하나라도 들어간 공고만. 없으면 그 회사의 활성 공고 전체.
 
-    def add(sql: str, value):
-        args.append(value)
-        conditions.append(sql.format(n=len(args)))
-
-    titles = [t.strip() for t in (title_keywords or []) if t and t.strip()]
-    if titles:   # 제목에 키워드가 하나라도 들어가면 통과
-        add("j.title ILIKE ANY(${n}::text[])", [f"%{t}%" for t in titles])
-    if company_name:
-        add("c.name ILIKE ${n}", f"%{company_name}%")
-    if category:
-        add("j.category ILIKE ${n}", f"%{category}%")
-    if location:
-        add("j.location ILIKE ${n}", f"%{location}%")
-    if max_years is not None:
-        add("(j.min_years IS NULL OR j.min_years <= ${n})", int(max_years))
-    if only_active:
-        conditions.append("j.is_active")
-    return conditions, args
-
-
-def score_posting_by_field_similarity(field_similarities: dict[str, Optional[float]]) -> Optional[float]:
-    """질의가 주어진 컬럼들의 유사도를 공고 하나의 점수(클수록 잘 맞음)로 합친다. None이면 결과에서 뺀다.
-
-    field_similarities: 질의가 주어진 컬럼만 들어 있다. 예) {"sim_responsibilities": 0.78, "sim_required": None}
-      값이 None이면 그 공고에 해당 본문이 없어 비교하지 못한 것이다.
+    Returns:
+      [{"id", "company", "title", "url", "location"}], 최근 확인 순 최대 20건.
     """
-    total_score = 0
-    for _, score in field_similarities.items():
-        if score:
-            total_score += score
-    return total_score
-
-
-@mcp.tool()
-async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
-                               q_responsibilities: Optional[str] = None,
-                               q_required: Optional[str] = None,
-                               q_preferred: Optional[str] = None,
-                               company_name: Optional[str] = None,
-                               category: Optional[str] = None,
-                               location: Optional[str] = None,
-                               max_years: Optional[int] = None,
-                               only_active: bool = True, limit: int = 20) -> list[dict]:
-    """채용공고 검색: WHERE 조건으로 먼저 거른 뒤, 남은 공고 전부를 컬럼별 임베딩으로 정확히 비교한다.
-
-    필터(정확히 일치/부분일치):
-      title_keywords: 직무명 키워드(예: ["MLOps", "엠엘옵스"]). 제목에 하나라도 들어간 공고만.
-      company_name / category / location: 부분일치. max_years: 요구 최소 경력이 이 값 이하(또는 명시 없음).
-    의미 검색(각 질의를 해당 컬럼 임베딩과 cosine 유사도로 비교, 주어진 것만):
-      q_responsibilities ↔ 하는 일, q_required ↔ 필수 역량, q_preferred ↔ 우대 역량.
-      공고 본문에 적혀 있을 법한 문장으로 쓴다. 예) q_required="Kubernetes 기반 서비스 운영 경험"
-    결과: similarity(컬럼별 유사도를 합친 점수) 내림차순, 질의한 컬럼의 sim_*도 포함.
-      의미 검색 질의가 하나도 없으면 필터만 적용해 최근 확인 순으로 돌려준다(similarity=None).
-    """
-    limit = max(1, min(int(limit), 100))
-
-    # 1) WHERE로 확정할 수 있는 조건부터 건다
-    conditions, args = build_posting_filter_conditions(
-        title_keywords, company_name, category, location, max_years, only_active)
-
-    # 2) 주어진 의미 검색 질의만 임베딩해서, 해당 컬럼과의 유사도 SELECT 식을 만든다
-    field_queries = {"q_responsibilities": q_responsibilities, "q_required": q_required,
-                     "q_preferred": q_preferred}
-    asked_fields = [name for name, text in field_queries.items() if text and text.strip()]
-    query_vectors = await asyncio.gather(*(embed_query(field_queries[name]) for name in asked_fields))
-    similarity_selects, similarity_keys = [], []
-    for name, vector in zip(asked_fields, query_vectors):
-        embedding_column, similarity_key = FIELD_QUERY_TO_EMBEDDING[name]
-        args.append(to_pg(vector))
-        similarity_selects.append(f"1 - (j.{embedding_column} <=> ${len(args)}::vector) AS {similarity_key}")
-        similarity_keys.append(similarity_key)
-
-    # 3) 필터를 통과한 공고 전부를 가져온다 (벡터 인덱스 없이 정확 비교: 근사 검색·후필터 누락이 없다)
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    select_columns = ", ".join(
-        ["j.id", "c.name AS company", "c.industry", "j.title", "j.url", "j.location", "j.employment_type",
-         "j.min_years", "j.category", "j.responsibilities", "j.required_qualifications",
-         "j.preferred_qualifications", "j.deadline"] + similarity_selects)
-    order_and_limit = "" if similarity_keys else f"ORDER BY j.last_seen_at DESC LIMIT {limit}"
+    clean_keywords = [keyword.strip() for keyword in (title_keywords or []) if keyword and keyword.strip()]
     p = await pool()
-    rows = [_row(r) for r in await p.fetch(
-        f"SELECT {select_columns} FROM job_postings j JOIN companies c ON c.id = j.company_id "
-        f"{where} {order_and_limit}", *args)]
-    if not similarity_keys:
-        return [{**row, "similarity": None} for row in rows]
-
-    # 4) 컬럼별 유사도를 점수로 합쳐 높은 순으로 자른다 (점수가 None인 공고는 뺀다)
-    scored_rows = []
-    for row in rows:
-        score = score_posting_by_field_similarity({key: row[key] for key in similarity_keys})
-        if score is not None:
-            scored_rows.append({**row, "similarity": score})
-    scored_rows.sort(key=lambda row: row["similarity"], reverse=True)
-    return scored_rows[:limit]
-
-
-@mcp.tool()
-async def get_job_posting(id: int) -> dict:
-    """공고 1건 전체(하는 일/필수/우대 역량)와 회사·산업 정보."""
-    p = await pool()
-    r = await p.fetchrow(
-        """SELECT j.id, c.name AS company, c.industry, j.title, j.url, j.location,
-                  j.employment_type, j.min_years, j.category, j.responsibilities,
-                  j.required_qualifications, j.preferred_qualifications, j.posted_at,
-                  j.deadline, j.is_active
-           FROM job_postings j JOIN companies c ON c.id = j.company_id WHERE j.id = $1""", id)
-    if r is None:
-        raise ValueError(f"공고 없음: id={id}")
-    return _row(r)
-
-
-@mcp.tool()
-async def get_cached_research(company_name: str, target_company: str, max_age_days: int = 14) -> dict:
-    """해당 회사·계열사의 가장 최근 리서치(max_age_days 이내). 없으면 빈 dict. topics의 회사 단위 토픽을 재사용한다.
-
-    target_company: 실제 채용 계열사명 (그룹 포털이 아니면 company_name과 같아도 됨).
-    """
-    p = await pool()
-    async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
-        r = await conn.fetchrow(
-            """SELECT id, posting_id, target_company, topics::text AS topics, report_md,
-                      created_at::text AS created_at
-               FROM company_research
-               WHERE company_id = $1 AND target_company = $2
-                 AND created_at > now() - make_interval(days => $3)
-               ORDER BY created_at DESC LIMIT 1""",
-            cid, target_company, int(max_age_days))
-    if r is None:
-        return {}
-    return {**dict(r), "topics": json.loads(r["topics"])}
-
-
-@mcp.tool()
-async def save_research(company_name: str, target_company: str, topics: list[dict], report_md: str,
-                        posting_id: Optional[int] = None) -> dict:
-    """리서치 결과 저장. topics: [{"topic", "summary", "sources": [{"title", "url"}]}]."""
-    p = await pool()
-    async with p.acquire() as conn:
-        cid = await _company_id(conn, company_name)
-        rid = await conn.fetchval(
-            """INSERT INTO company_research (company_id, target_company, posting_id, topics, report_md)
-               VALUES ($1, $2, $3, $4::jsonb, $5) RETURNING id""",
-            cid, target_company, posting_id, json.dumps(topics, ensure_ascii=False), report_md)
-    return {"id": rid}
+    rows = await p.fetch(
+        """SELECT j.id, c.name AS company, j.title, j.url, j.location
+           FROM job_postings j JOIN companies c ON c.id = j.company_id
+           WHERE j.is_active AND c.name ILIKE $1
+             AND ($2::text[] IS NULL OR j.title ILIKE ANY($2::text[]))
+           ORDER BY j.last_seen_at DESC LIMIT 20""",
+        f"%{company_name}%", [f"%{keyword}%" for keyword in clean_keywords] or None)
+    return [dict(r) for r in rows]
 
 
 @mcp.tool()

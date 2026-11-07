@@ -9,7 +9,7 @@
 ## 하루 요청 예산
 - 상세 JD 조회는 두 사이트 합쳐 하루 최대 30건입니다. 링크드인은 최대 15건, 원티드는 30건에서 링크드인 예정분을 뺀 만큼(최대 20건) 씁니다.
 - 검색(목록) 요청은 원티드 최대 14회(검색어 7개 × 2페이지), 링크드인 최대 7회(검색어 7개 × 1회)입니다.
-- 이미 DB에 있는 URL은 상세를 다시 읽지 않습니다. touch_postings로 last_seen만 갱신합니다.
+- 이미 DB에 있는 URL은 상세를 다시 읽지 않습니다. touch_postings(company_name, urls)로 last_seen만 갱신합니다.
 - 예산을 넘는 후보는 최신 공고부터 처리하고, 남은 후보 수는 record_scrape_run detail과 마무리 보고에 적습니다.
 - 모든 요청 사이에 1초 이상 간격을 둡니다(링크드인은 1.5초 이상).
 
@@ -52,17 +52,17 @@
 - 회사명은 링크드인 표기가 아니라 실제 법인/브랜드명으로 정리합니다(예: "Toss" → "토스", "42dot" → "포티투닷", "Coupang" → "쿠팡", "Karrot" → "당근"). 헤드헌터(Harper, Crossing Hurdles, Alignerr 등)나 재게시 계정(FDE Times 등)의 공고는 위 헤드헌팅 규칙을 따릅니다.
 
 ## 저장 방법
-- company_name은 실제 채용 회사명입니다. "(주)", "주식회사" 등은 떼고, list_companies에 이미 있는 회사는 그 이름을 그대로 씁니다(같은 회사가 다른 표기로 이미 있으면 기존 이름 사용). 표기가 헷갈리면 semantic_search_jobs(company_name=회사명 일부)로 확인합니다(부분일치).
+- company_name은 실제 채용 회사명입니다. "(주)", "주식회사" 등은 떼고, list_companies에 이미 있는 회사는 그 이름을 그대로 씁니다(같은 회사가 다른 표기로 이미 있으면 기존 이름 사용). 표기가 헷갈리면 list_companies 결과에서 비슷한 이름을 찾아 기존 이름을 씁니다.
 - upsert_job_posting이 "등록되지 않은 회사"로 실패하면 upsert_company(name=실제 회사명, portal_url=위 사이트별 규칙의 회사 페이지 URL, industry=페이지에 있으면 기입, access_method="unknown", notes="[via_job_portal] 채용 사이트 경유로 등록 — 자사 사이트 수집(A) 대상 아님")를 호출한 뒤 다시 저장합니다. notes는 반드시 "[via_job_portal]"로 시작해야 (A) 수집이 이 회사를 건너뜁니다. access_method에 "via_job_portal"을 넣으면 DB 제약으로 실패합니다.
-- upsert_company가 시간 초과로 실패하면, 재시도 전에 list_companies나 semantic_search_jobs로 이미 들어갔는지 확인합니다.
+- upsert_company가 시간 초과로 실패하면, 재시도 전에 list_companies로 이미 들어갔는지 확인합니다.
 - 하는 일 / 필수 역량 / 우대 역량은 JD 원문에서 옮기고, 너무 길면 줄인 뒤 "(이하 생략)"을 붙입니다. 원문에 해당 섹션이 없으면 비워 둡니다.
 - source_snapshot에 "채용 사이트: 원티드" 또는 "채용 사이트: 링크드인"과 수집일을 적습니다. JD 일부만 읽었거나, 섹션을 나누지 못했거나, 목록에서만 얻은 정보면 그 사실도 적습니다.
 - 페이지에 없는 정보(마감일, 경력, 자격요건)는 추측해 채우지 않습니다. 날짜는 YYYY-MM-DD입니다. is_actually_ai 필드는 건드리지 않습니다.
 - 상세 URL이 없으면 저장하지 않습니다.
 
 ## 중복 처리
-- 채용 회사별로 list_known_urls와 list_filtered_urls를 한 번씩 호출해 결과를 재사용합니다. 이미 있는 URL이면 touch_postings만 호출하고(상세 조회 예산을 쓰지 않음), 필터된 URL이면 건너뜁니다. 두 도구가 "등록되지 않은 회사" 오류를 내면 처음 보는 회사이므로 빈 목록으로 간주합니다.
-- 같은 공고가 다른 사이트(자사 사이트·사람인·잡코리아·리멤버·피플앤잡 등)에 이미 저장됐을 수 있습니다. 새 후보의 상세를 읽기 전에 semantic_search_jobs(company_name=실제 회사명, title_keywords=[제목의 핵심 직무어])로 확인합니다. 같은 직무·같은 팀의 활성 공고가 있으면 상세를 읽지 않고 "중복 건너뜀"으로 셉니다.
+- 사이트(원티드 `https://www.wanted.co.kr`, 링크드인 `https://www.linkedin.com`)마다, 목록에서 모은 후보 URL을 candidate_urls로 넘겨 list_known_urls(site_url, candidate_urls)와 list_filtered_urls(같은 인자)를 한 번씩 호출합니다. 돌려받은 URL이 이미 본 공고입니다. 저장된 URL이면 touch_postings(company_name=실제 회사명, urls)만 호출하고(회사별로 묶어서, 상세 조회 예산을 쓰지 않음), 필터된 URL이면 건너뜁니다. 회사 등록 여부와 상관없이 동작합니다.
+- 같은 공고가 다른 사이트(자사 사이트·사람인·잡코리아·리멤버·피플앤잡 등)에 이미 저장됐을 수 있습니다. 새 후보의 상세를 읽기 전에 find_active_postings_by_company_and_title(company_name=실제 회사명, title_keywords=[제목의 핵심 직무어])로 확인합니다. 같은 직무·같은 팀의 활성 공고가 있으면 상세를 읽지 않고 "중복 건너뜀"으로 셉니다.
 - JD를 읽고 제외한 공고는 record_filtered_postings(company_name=실제 채용 회사명, stage "detail")에 사유와 함께 기록합니다. 회사가 미등록이거나 회사를 알 수 없는 헤드헌팅 공고는 기록하지 않고 마무리 보고에 적습니다.
 
 ## 페이지 읽기

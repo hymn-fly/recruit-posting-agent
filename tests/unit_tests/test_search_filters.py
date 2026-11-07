@@ -1,5 +1,5 @@
-"""mcp_server.server의 검색 필터 조립(build_posting_filter_conditions) 단위 테스트. DB 없이 SQL 조각만 확인한다."""
-from mcp_server.server import build_posting_filter_conditions
+"""mcp_server.query_server의 검색 필터 조립(build_posting_filter_conditions) 단위 테스트. DB 없이 SQL 조각만 확인한다."""
+from mcp_server.query_server import build_posting_filter_conditions
 
 
 def test_필터가_없으면_활성_공고_조건만_붙는다():

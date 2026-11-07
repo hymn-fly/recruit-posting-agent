@@ -6,7 +6,7 @@
 make-agents/
 ├── agents/          # 공용·진입점: CLI, 상태, LLM, MCP 연결
 │   └── graphs/      # LangGraph 그래프: Supervisor + Agent별(채용공고 조회 / 기업분석 / 내 프로필)
-├── mcp_server/      # DB 접근 계층: MCP 서버 2개 + 임베딩
+├── mcp_server/      # DB 접근 계층: MCP 서버 3개 + 공통 DB 코드 + 임베딩
 ├── db/              # Postgres 스키마
 ├── scripts/         # 1회성/관리용 CLI
 ├── scrapers/        # 수집 대상 회사 목록
@@ -20,7 +20,7 @@ make-agents/
 |---|---|
 | `state.py` | 모든 그래프의 상태(TypedDict)와 LLM 구조화 출력 스키마(pydantic). Agent별 / Supervisor용 섹션으로 나뉨 |
 | `llm.py` | LLM 공용 래퍼 `LLM`. 기본 Gemma → 시간 초과·에러 시 `gpt-6-luna` 폴백, 실패하면 5분간 Gemma를 건너뛰는 서킷 브레이커. `schema=`면 구조화 출력 |
-| `mcp_client.py` | MCP 서버 2개 연결. `get_tools()`(호출마다 서버 기동, 단발 실행용) / `open_tools()`(세션 유지, REPL·테스트용). MCP 결과 정규화 `parse_mcp_tool_result()` / 단건 `get_first_mcp_result()` |
+| `mcp_client.py` | MCP 서버 3개(job-db, job-query, profile-db) 연결. `get_tools()`(호출마다 서버 기동, 단발 실행용) / `open_tools()`(세션 유지, REPL·테스트용). MCP 결과 정규화 `parse_mcp_tool_result()` / 단건 `get_first_mcp_result()` |
 | `main_chat.py` | 대화 CLI (`/select N`, `/id ID`, `/reset`, `/quit`) |
 
 ### `agents/graphs/`: Supervisor와 Agent별 그래프
@@ -34,7 +34,9 @@ make-agents/
 ### `mcp_server/`: DB 접근 계층
 | 파일 | 역할 |
 |---|---|
-| `server.py` | **`job-db`** MCP 서버. 적재(`upsert_company`, `upsert_job_posting`, `list_known_urls`, `touch_postings`, `record_filtered_postings`, `list_filtered_urls`, `record_scrape_run`), 크롤링 상태(`list_latest_scrape_status_by_source`), 검색(`semantic_search_jobs`, `get_job_posting`, `list_companies`), 임베딩(`embed_pending_postings`), 리서치 캐시(`get_cached_research`, `save_research`). 커넥션 풀 `pool()` |
+| `db.py` | 서버들이 공유하는 DB 코드: `.env` 로딩, 커넥션 풀 `pool()`, `lifespan`, 회사명→id `get_company_id_by_name()` |
+| `server.py` | **`job-db`** MCP 서버(적재 전용, 예약 작업이 씀). 회사·공고(`upsert_company`, `upsert_job_posting`, `list_companies`, `touch_postings`, `find_active_postings_by_company_and_title`), 본 공고 확인(`list_known_urls`, `list_filtered_urls`: **사이트 URL 기준**), 필터 기록(`record_filtered_postings`), 크롤링 기록(`record_scrape_run`, `list_latest_scrape_status_by_source`), 임베딩(`embed_pending_postings`) |
+| `query_server.py` | **`job-query`** MCP 서버(조회·분석 전용, 대화형 에이전트가 씀). 검색(`semantic_search_jobs`), 공고 상세(`get_job_posting`), 리서치 캐시(`get_cached_research`, `save_research`). 예약 작업에는 등록하지 않음 |
 | `profile_server.py` | **`profile-db`** MCP 서버. 개인 자료 읽기 전용(`get_profile_summary`, `search_profile`, `list_profile_documents`). 예약 작업에는 등록하지 않아 이력서가 노출되지 않음 |
 | `embeddings.py` | Gemini 임베딩(768차원) `embed_documents`/`embed_query`, 무료 티어 대응 배치·재시도, pgvector 변환, 해시 |
 
@@ -91,7 +93,8 @@ flowchart LR
     end
 
     subgraph MCP["MCP 서버 (mcp_server/)"]
-        JDB["job-db<br/>server.py"]
+        JDB["job-db<br/>server.py (적재)"]
+        JQ["job-query<br/>query_server.py (조회)"]
         PDB["profile-db<br/>profile_server.py"]
     end
 
@@ -107,15 +110,17 @@ flowchart LR
 
     CD -- "upsert_job_posting, embed_pending_postings ..." --> JDB
     CD -. "채용 포털 읽기" .-> WEB["회사 채용 포털"]
-    JS -- semantic_search_jobs --> JDB
-    CR -- "get_cached_research, save_research" --> JDB
+    JS -- semantic_search_jobs --> JQ
+    CR -- "get_cached_research, save_research" --> JQ
     CR --> TAV
     PG -- "get_profile_summary, search_profile" --> PDB
-    SV -- "get_job_posting" --> JDB
+    SV -- "get_job_posting" --> JQ
     FILES --> SCR --> DB
     JDB --> DB
+    JQ --> DB
     PDB --> DB
-    JDB -. "질의/공고 임베딩" .-> GEM
+    JDB -. "공고 임베딩" .-> GEM
+    JQ -. "질의 임베딩" .-> GEM
     PDB -. "질의 임베딩" .-> GEM
     Chat -. "LLM 호출 (agents/llm.py)" .-> GEM
     Chat -. "Gemma 실패 시" .-> OAI
@@ -138,7 +143,7 @@ sequenceDiagram
             CD->>JDB: record_scrape_run(portal_url, unverifiable)
         else 수집 가능
             CD->>Web: 목록 페이지 읽기
-            CD->>JDB: list_filtered_urls / list_known_urls
+            CD->>JDB: list_filtered_urls / list_known_urls (site_url=portal_url)
             Note over CD: 제목·직군으로 AI 공고 후보만 추림
             CD->>JDB: record_filtered_postings(stage=list)
             CD->>JDB: touch_postings(이미 저장된 URL)
@@ -185,6 +190,7 @@ sequenceDiagram
     participant CR as 기업분석 Agent
     participant PG as 내 프로필 Agent
     participant JDB as job-db
+    participant JQ as job-query
     participant PDB as profile-db
     participant TAV as Tavily
 
@@ -192,21 +198,21 @@ sequenceDiagram
     SV->>SV: 라우팅 (Route.next = job_search)
     SV->>JS: question
     JS->>JS: plan: 역할·자격 중심 검색문 + 명시된 필터
-    JS->>JDB: semantic_search_jobs(title_keywords, q_*, 필터) → 필터 후 컬럼별 유사도 top 20
+    JS->>JQ: semantic_search_jobs(title_keywords, q_*, 필터) → 필터 후 컬럼별 유사도 top 20
     JS->>JS: rerank_explain: LLM이 5건 선택 + 근거
     JS-->>SV: candidates 1~5번
     SV-->>U: 추천 공고 목록
 
     U->>SV: "2번 공고 회사 분석하고 내가 부족한 점도 알려줘"
-    SV->>JDB: get_job_posting(2번 id) → selected_posting
+    SV->>JQ: get_job_posting(2번 id) → selected_posting
     SV->>CR: posting
     CR->>CR: plan_queries: 실제 계열사·산업·경쟁사 판별, 토픽별 검색어
-    CR->>JDB: get_cached_research(회사, 계열사, 14일)
+    CR->>JQ: get_cached_research(회사, 계열사, 14일)
     par 캐시에 없는 토픽만 병렬
         CR->>TAV: 산업 현황 / 발전 방향 / 경쟁사 / 기업 전략 / 직무 동향
     end
     CR->>CR: 토픽별 [n] 출처 요약 → 리포트 작성
-    CR->>JDB: save_research(topics, report)
+    CR->>JQ: save_research(topics, report)
     CR-->>SV: research_report
     SV->>PG: posting + research_report
     PG->>PDB: get_profile_summary()
@@ -252,7 +258,7 @@ uv run python scripts/ingest_profile.py data/profile/portfolio.md --kind portfol
 - 지원 형식: `.pdf` `.docx` `.md` `.txt` (스캔 이미지 PDF는 텍스트가 없어 건너뜀)
 - **개인정보 주의**: 추출한 텍스트는 Neon DB(`profile_*` 테이블)에 저장되고, 임베딩·요약을 위해 Gemini/OpenAI API로 전송된다.
   주민번호·연락처 등 불필요한 정보는 지우고 넣는 것을 권장한다.
-- 개인 자료는 `profile-db` MCP 서버로만 조회된다(예약 작업용 `job-db`에는 노출되지 않음).
+- 개인 자료는 `profile-db` MCP 서버로만 조회된다(예약 작업용 `job-db`에는 노출되지 않음). 조회·분석 tool은 `job-query`로 분리해 예약 작업이 쓰지 않는다.
 
 ## Multi-Agent 대화 (채용공고 조회 · 기업분석 · 내 프로필)
 ```bash
