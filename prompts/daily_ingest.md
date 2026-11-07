@@ -75,6 +75,19 @@ AI 관련 = AI/ML/LLM/MLOps/데이터 사이언스·엔지니어링이 핵심 �
 - 예약 작업은 컴퓨터가 켜져 있고 Claude Desktop이 실행 중일 때만 돈다.
 - 예약 작업에서 로컬 MCP 서버를 쓸 수 있는지는 처음에 `list_companies` 호출만 하는 작은 작업으로 먼저 확인한다.
 
+## HTTP로 실행 (선택)
+
+기본은 stdio(클라이언트가 서버 프로세스를 직접 띄움)다. 서버를 따로 띄워 두고 HTTP로 붙이려면:
+
+```bash
+cd /Users/gilgeun-o/Desktop/Projects/make-agents
+uv run python mcp_server/collect_server.py --transport streamable-http --port 8000   # 주소: http://127.0.0.1:8000/mcp
+```
+
+- `127.0.0.1`에서만 받는다. 인증이 없고 저장·삭제 tool이 있어서 외부에 열지 않는다.
+- Claude Code: `claude mcp add --transport http job-db http://127.0.0.1:8000/mcp`
+- 이 프로젝트의 에이전트: `agents/mcp_client.py`의 연결을 `{"transport": "streamable_http", "url": "http://127.0.0.1:8000/mcp"}`로 바꾼다.
+
 ## 사전 준비
 
 ```bash

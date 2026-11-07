@@ -338,6 +338,13 @@
 - **변경**: `mcp_server/collect_server.py`(주석만)
 - **검증**: 주석만 바꿨다. `uv run pytest` 통과.
 
+### #33 `collect_server.py`를 HTTP(streamable-http)로도 실행할 수 있게 함
+- **무엇을**: `python mcp_server/collect_server.py`에 `--transport {stdio,streamable-http}`(기본 stdio)와 `--port`(기본 8000) 옵션을 추가했다. HTTP 주소는 `http://127.0.0.1:{port}/mcp`.
+- **왜**: 기존엔 `mcp.run()`만 호출해서 항상 stdio였고, 클라이언트가 호출할 때마다 서버 프로세스를 새로 띄워야 했다.
+- **변경**: `mcp_server/collect_server.py`(`__main__`), `prompts/daily_ingest.md`("HTTP로 실행" 절)
+- **검증**: `--transport streamable-http --port 8765`로 띄워 MCP 클라이언트로 붙어 tool 12개 목록과 `list_latest_scrape_status_by_source` 호출 성공을 확인했다. `langchain_mcp_adapters`(`transport: streamable_http`)로도 12개를 로딩했다. 옵션 없이 실행하는 stdio 경로는 그대로이며 `get_tools()`가 세 서버 합쳐 19개를 로딩했다. 종료 후 포트가 정리됨을 확인했다.
+- **주의**: host는 옵션으로 열지 않고 `127.0.0.1`로 고정했다. 인증이 없고 저장·삭제 tool이 있어서다. 외부에 열려면 인증(리버스 프록시 등)을 먼저 붙여야 한다. Claude Desktop 설정 파일은 stdio 명령 실행만 지원하므로 HTTP 연결에는 별도 브리지가 필요하며(미검증), 기존 stdio 설정은 그대로 쓸 수 있다.
+
 ---
 
 ## 미해결 / 다음 후보

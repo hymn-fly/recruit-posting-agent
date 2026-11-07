@@ -417,4 +417,14 @@ async def list_companies() -> list[dict]:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="수집용 MCP 서버(job-db)")
+    parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio",
+                        help="stdio(기본): 클라이언트가 프로세스를 직접 띄움 / streamable-http: HTTP 서버로 계속 떠 있음")
+    parser.add_argument("--port", type=int, default=8000, help="streamable-http일 때 포트 (기본 8000, 주소는 /mcp)")
+    cli_args = parser.parse_args()
+
+    # 인증이 없고 쓰기·삭제 tool이 있으므로 HTTP는 내 컴퓨터(127.0.0.1)에서만 받는다. host는 일부러 옵션으로 열지 않았다
+    mcp.settings.port = cli_args.port
+    mcp.run(transport=cli_args.transport)
