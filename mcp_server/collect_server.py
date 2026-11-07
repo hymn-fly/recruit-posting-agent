@@ -143,6 +143,17 @@ async def upsert_job_posting(company_name: str, title: str, url: Optional[str] =
     return dict(row)
 
 
+# 한계(list_known_urls / list_filtered_urls / touch_postings 공통): 사이트는 "저장된 공고 URL의 호스트"로 구분한다.
+# 목록을 보는 사이트(site_url)와 상세 공고 URL의 호스트가 다르면 이미 저장된 공고를 못 찾는다.
+#   예) IBK기업은행: 포털은 ibk.incruit.com, 저장된 공고 URL은 ibk3/ibk4.incruit.com에도 있음
+#       -> site_url='ibk.incruit.com'으로는 형제 하위 도메인이 안 잡혀 3건 중 1건만 나온다.
+# 놓쳐도 JD를 한 번 더 읽는 비용만 들 뿐, 저장은 URL 기준 upsert라 중복 저장되지는 않는다.
+# 더 줄이고 싶으면:
+#   1) site_url을 최상위 도메인 수준('incruit.com')으로 비교한다. 구현은 쉽지만 같은 도메인의
+#      다른 서비스(예: 서로 다른 회사의 incruit.com 채용관)까지 한 사이트로 묶인다.
+#   2) job_postings / filtered_postings에 source 컬럼을 두고 저장 시 크롤링한 사이트(site_url)를 기록한다.
+#      가장 정확하지만 기존 행을 채우는 규칙(마이그레이션)과 upsert_job_posting /
+#      record_filtered_postings의 인자 추가, 프롬프트 수정이 따라온다.
 @mcp.tool()
 async def list_known_urls(site_url: str, candidate_urls: Optional[list[str]] = None) -> list[str]:
     """이 사이트에서 이미 저장해 둔 활성 공고의 URL 목록. 이미 저장된 공고의 JD를 다시 읽지 않으려고 쓴다.
@@ -209,6 +220,7 @@ async def record_filtered_postings(company_name: str, items: list[dict]) -> dict
     return {"recorded": len(rows)}
 
 
+# 호스트가 다른 사이트의 공고를 못 찾는 한계와 개선 방법은 list_known_urls 위의 주석을 참고
 @mcp.tool()
 async def list_filtered_urls(site_url: str, candidate_urls: Optional[list[str]] = None) -> list[str]:
     """이 사이트에서 이미 걸러낸(AI 공고가 아니라고 기록한) 공고의 URL 목록. 같은 공고의 JD를 매번 다시 읽지 않으려고 쓴다.

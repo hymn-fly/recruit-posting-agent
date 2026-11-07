@@ -332,6 +332,12 @@
 - **검증**: 실제 Neon에서 트랜잭션 안에서 실행하고 롤백했다. 삭제 tool은 336건 중 14건(만료 11, URL 없음 3)을 대상으로 잡았고 롤백 후 336건으로 복구됐다. 만료 12건 중 1건은 URL도 없어 "URL 없음"으로 분류된다. `company_research.posting_id`는 `ON DELETE SET NULL`이라 리서치 캐시는 남고, 끊어진 참조도 없었다. `touch_postings`는 사람인 URL 14건을 `saramin.co.kr`로 호출하면 14건 갱신, `jobkorea.co.kr`로 호출하면 0건이었다. `uv run pytest` 29 passed / 5 skipped, ruff 통과.
 - **주의**: 삭제 tool은 아직 실제 DB에 실행하지 않았다. 다음 예약 작업이 처음 돌 때 위 14건이 지워진다. Claude Desktop 설정(`claude_desktop_config.json`)의 `args`를 `mcp_server/collect_server.py`로 고치고 재시작해야 하며, 수집 프롬프트 3개도 다시 붙여 넣어야 한다.
 
+### #32 사이트 기준 조회의 한계와 개선 방법을 코드 주석으로 기록
+- **무엇을**: `list_known_urls` 위에 한계와 개선 방법 주석을, `list_filtered_urls` 위에 그 주석을 가리키는 한 줄을 추가했다. 동작은 바꾸지 않았다.
+- **왜**: 사이트를 저장된 공고 URL의 호스트로 구분하므로, 목록을 보는 사이트와 상세 URL의 호스트가 다르면 이미 저장된 공고를 못 찾는다(예: IBK `ibk.incruit.com` 포털, 공고는 `ibk3/ibk4.incruit.com`). 나중에 개선할 때 근거를 코드에서 바로 볼 수 있게 했다. 개선안은 ① 최상위 도메인 수준 비교, ② `source` 컬럼 추가.
+- **변경**: `mcp_server/collect_server.py`(주석만)
+- **검증**: 주석만 바꿨다. `uv run pytest` 통과.
+
 ---
 
 ## 미해결 / 다음 후보
