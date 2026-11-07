@@ -27,7 +27,7 @@ make-agents/
 | 파일 | 역할 |
 |---|---|
 | `supervisor.py` | **Supervisor**. 라우터 LLM이 다음 Agent를 고르고, "2번 공고"를 추천 목록에서 찾아 선택. 한 턴 최대 3개 Agent, Agent별 MCP 도구 제한 |
-| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(직무명 → 제목 키워드 필터, 하는 일/필수/우대 → 컬럼별 의미 검색 질의) → `retrieve`(`semantic_search_jobs` 상위 20건, 마감 임박 요청이면 마감순) → `rerank_explain`(LLM이 요청한 개수만큼 선택·근거, 기본 5건·최대 10건) |
+| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(직무명 → 제목 키워드 필터, 하는 일/필수/우대 → 컬럼별 의미 검색 질의) → `retrieve`(`semantic_search_jobs` 상위 20건, 마감 임박 요청이면 마감순. 자격요건 등 질의가 같이 있으면 유사도로 고른 뒤 마감순) → `rerank_explain`(LLM이 요청한 개수만큼 선택·근거, 기본 5건·최대 10건) |
 | `company_research_graph.py` | **기업분석 Agent**. `plan_queries`(실제 계열사·산업·경쟁사, 토픽별 검색어) → `load_cache`(14일) → `search_topic`×N(Tavily 병렬) → `synthesize`(리포트·출처) |
 | `profile_gap_graph.py` | **내 프로필 Agent**. `load` → `decompose`(요구사항 분해) → `match`(요구사항별 이력서 근거 검색·판정) → `synthesize`(강점/부족한 점/보완 방법) |
 
@@ -278,4 +278,6 @@ uv run python agents/main_chat.py
   ③ `score_posting_by_field_similarity`로 합친 점수 순으로 돌려준다. 결과에 질의한 컬럼의 `sim_*`가 포함된다.
   마감이 지난 공고는 항상 빠지고(마감일 없는 상시 공고는 유지), `deadline_within_days`(N일 안 마감)와
   `sort_by_deadline`(마감일이 있는 공고만 마감 임박순)으로 "기한이 얼마 안 남은 공고"를 물을 수 있다.
+  `sort_by_deadline`과 `q_*`를 함께 주면 유사도 상위 `limit`건을 고른 뒤 그 안에서 마감이 가까운 순으로 정렬한다.
+  추천 개수는 `agents/graphs/job_search_graph.py`의 `DEFAULT_RESULT_COUNT`(5)·`MAX_RESULT_COUNT`(10)로 정한다.
 - 새로 적재된 공고는 `embed_pending_postings`(예약 작업 마지막 단계) 또는 `uv run python scripts/embed_postings.py`로 임베딩해야 검색된다.

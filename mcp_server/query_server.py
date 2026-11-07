@@ -97,7 +97,9 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
       only_active=True(기본)이면 마감이 지난 공고는 항상 빠진다(마감일이 없는 상시 공고는 남는다).
     정렬:
       sort_by_deadline=True: 마감일이 적힌 공고만, 마감이 가까운 순으로 돌려준다('마감 임박'을 물을 때).
-        이때는 의미 검색 점수를 계산하지 않고(q_* 무시) similarity는 None이다.
+        q_*도 주면 "어떤 공고를 고를지"는 유사도로, "보여주는 순서"는 마감일로 정한다:
+        유사도 상위 limit건을 고른 뒤 그 안에서 마감이 가까운 순(같으면 유사도 높은 순)으로 정렬한다.
+        q_*가 없으면 유사도 없이 마감이 가까운 순으로 limit건(similarity=None).
     의미 검색(각 질의를 해당 컬럼 임베딩과 cosine 유사도로 비교, 주어진 것만):
       q_responsibilities ↔ 하는 일, q_required ↔ 필수 역량, q_preferred ↔ 우대 역량.
       공고 본문에 적혀 있을 법한 문장으로 쓴다. 예) q_required="Kubernetes 기반 서비스 운영 경험"
@@ -114,7 +116,7 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
     # 2) 주어진 의미 검색 질의만 임베딩해서, 해당 컬럼과의 유사도 SELECT 식을 만든다
     field_queries = {"q_responsibilities": q_responsibilities, "q_required": q_required,
                      "q_preferred": q_preferred}
-    asked_fields = [] if sort_by_deadline else [name for name, text in field_queries.items() if text and text.strip()]
+    asked_fields = [name for name, text in field_queries.items() if text and text.strip()]
     query_vectors = await asyncio.gather(*(embed_query(field_queries[name]) for name in asked_fields))
     similarity_selects, similarity_keys = [], []
     for name, vector in zip(asked_fields, query_vectors):
@@ -129,17 +131,17 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
         ["j.id", "c.name AS company", "c.industry", "j.title", "j.url", "j.location", "j.employment_type",
          "j.min_years", "j.category", "j.responsibilities", "j.required_qualifications",
          "j.preferred_qualifications", "j.deadline"] + similarity_selects)
-    if sort_by_deadline:
-        order_and_limit = f"ORDER BY j.deadline ASC, j.last_seen_at DESC LIMIT {limit}"
-    elif similarity_keys:
+    if similarity_keys:   # 유사도 점수는 아래 4)에서 계산하므로 SQL에서 자르지 않는다
         order_and_limit = ""
+    elif sort_by_deadline:
+        order_and_limit = f"ORDER BY j.deadline ASC, j.last_seen_at DESC LIMIT {limit}"
     else:
         order_and_limit = f"ORDER BY j.last_seen_at DESC LIMIT {limit}"
     p = await pool()
     rows = [_row(r) for r in await p.fetch(
         f"SELECT {select_columns} FROM job_postings j JOIN companies c ON c.id = j.company_id "
         f"{where} {order_and_limit}", *args)]
-    if sort_by_deadline or not similarity_keys:
+    if not similarity_keys:
         return [{**row, "similarity": None} for row in rows]
 
     # 4) 컬럼별 유사도를 점수로 합쳐 높은 순으로 자른다 (점수가 None인 공고는 뺀다)
@@ -149,7 +151,13 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
         if score is not None:
             scored_rows.append({**row, "similarity": score})
     scored_rows.sort(key=lambda row: row["similarity"], reverse=True)
-    return scored_rows[:limit]
+    top_rows = scored_rows[:limit]
+
+    # 5) 마감순 요청이면, 유사도로 고른 공고들을 마감이 가까운 순(같으면 유사도 높은 순)으로 다시 정렬한다
+    #    deadline은 _row가 ISO 문자열(YYYY-MM-DD)로 바꿔 두었고 require_deadline으로 비어 있지 않다
+    if sort_by_deadline:
+        top_rows.sort(key=lambda row: (row["deadline"], -row["similarity"]))
+    return top_rows
 
 
 @mcp.tool()

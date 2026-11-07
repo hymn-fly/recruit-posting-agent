@@ -34,7 +34,8 @@ PLAN_PROMPT = (
     "LLM Engineer, MLOps, Data) 중 하나와 같으면 category만 채우고 title_keywords는 넣지 않는다"
     "(제목에 그 단어가 없는 공고가 빠진다).\n"
     "- 마감 조건: '마감 임박'·'기한이 얼마 안 남은'이면 sort_by_deadline=true, '2주 안에'처럼 기간이 있으면 "
-    "deadline_within_days도 채운다. '만료되지 않은'은 기본 동작이라 따로 채우지 않는다. "
+    "deadline_within_days도 채운다. 마감 조건과 q_*는 함께 쓸 수 있다(예: '마감 임박한 것 중 Kubernetes 경험을 요구하는 공고' → "
+    "sort_by_deadline=true + q_required). '만료되지 않은'은 기본 동작이라 따로 채우지 않는다. "
     "사용자가 개수('10개')를 말하면 result_count에 넣는다.\n\n"
 )
 
@@ -55,7 +56,8 @@ def format_search_rows_for_log(rows: list[dict]) -> str:
     for rank, row in enumerate(rows, 1):
         similarities = " ".join(f"{label}={format_similarity_for_display(row.get(key))}"
                                 for label, key in SIMILARITY_LOG_LABELS if key in row)
-        lines.append(f"    {rank:>2}. id={row.get('id')} [{row.get('company')}] {row.get('title')}  {similarities}")
+        deadline = f"  마감={row['deadline']}" if row.get("deadline") else ""
+        lines.append(f"    {rank:>2}. id={row.get('id')} [{row.get('company')}] {row.get('title')}  {similarities}{deadline}")
     return "\n".join(lines)
 
 
@@ -103,7 +105,8 @@ def make_graph(tools: dict):
         plan = state["plan"]
         pick_count = min(max(plan.result_count or DEFAULT_RESULT_COUNT, 1), MAX_RESULT_COUNT)
         deadline_order_rule = (
-            "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고 앞에서부터 요청에 맞는 것을 고른다. "
+            "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고, 앞에서부터 요청(자격요건 등 조건이 "
+            "있으면 그 조건)에 맞는 것을 고른다. "
             "마감일은 후보의 deadline 필드 값만 쓴다.\n" if plan.sort_by_deadline else "")
         ranking = await ranker.ainvoke(
             f"아래 후보 공고 중 사용자 요청(과 프로필)에 가장 잘 맞는 것을 최대 {pick_count}건 골라 순서대로 나열하라. "
