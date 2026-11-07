@@ -53,3 +53,32 @@ async def test_의미검색_질의가_없으면_유사도_대신_대시로_표�
     out = await job_search_graph.make_graph(tools).ainvoke({"question": "MLOps 공고 보여줘"})
 
     assert "(id=7, 유사도 -)" in out["answer"]
+
+
+async def test_마감_임박_요청은_마감순_검색_조건을_넘기고_개수는_요청대로_추천한다(fake_llm, make_tools, make_posting):
+    results = [make_posting(id=i, title=f"공고{i}", deadline=f"2026-11-{10 + i:02d}") for i in range(1, 13)]
+    tools = make_tools(semantic_search_jobs=results)
+    fake_llm.set(JobSearchPlan, JobSearchPlan(category="AI Engineer", sort_by_deadline=True, result_count=10))
+    fake_llm.set(Ranking, Ranking(picks=[Pick(id=i, reason="마감 임박") for i in range(1, 13)]))
+
+    out = await job_search_graph.make_graph(tools).ainvoke({"question": "마감 임박한 AI Engineer 공고 10개"})
+
+    # result_count는 검색 도구에 넘기지 않고, 정렬 조건만 넘긴다
+    assert tools["semantic_search_jobs"].calls == [
+        {"category": "AI Engineer", "sort_by_deadline": True, "limit": job_search_graph.TOP_K}]
+    assert [c["id"] for c in out["candidates"]] == list(range(1, 11))   # 10개까지 (예전엔 5개가 상한이었다)
+    assert "마감 2026-11-11" in out["answer"]
+    prompt = fake_llm.prompts[Ranking][0]
+    assert "최대 10건" in prompt and "마감이 가까운 순으로 이미 정렬" in prompt
+    assert '"deadline": "2026-11-11"' in prompt   # 재순위 프롬프트에 마감일이 들어간다
+
+
+async def test_개수를_말하지_않으면_5건까지_추천하고_상한은_10건이다(fake_llm, make_tools, make_posting):
+    results = [make_posting(id=i, title=f"공고{i}") for i in range(1, 16)]
+    fake_llm.set(Ranking, Ranking(picks=[Pick(id=i, reason="일치") for i in range(1, 16)]))
+
+    for requested, expected_count in ((None, 5), (3, 3), (50, 10)):
+        fake_llm.set(JobSearchPlan, JobSearchPlan(title_keywords=["LLM"], result_count=requested))
+        out = await job_search_graph.make_graph(make_tools(semantic_search_jobs=results)).ainvoke(
+            {"question": "LLM 공고"})
+        assert len(out["candidates"]) == expected_count

@@ -14,6 +14,9 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 _pool: Optional[asyncpg.Pool] = None
 
+# 한국 시간 기준 오늘 날짜(date). 마감일(deadline) 비교에 쓴다
+KST_TODAY_SQL = "(now() AT TIME ZONE 'Asia/Seoul')::date"
+
 
 async def pool() -> asyncpg.Pool:
     global _pool

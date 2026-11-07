@@ -23,6 +23,12 @@ class JobSearchPlan(BaseModel):
     company_name: Optional[str] = None
     location: Optional[str] = None
     max_years: Optional[int] = Field(None, description="사용자 경력 연차가 명시된 경우만 그 숫자")
+    deadline_within_days: Optional[int] = Field(
+        None, description="'2주 안에 마감'처럼 기간을 말했을 때만 그 일수(1주=7). 단순히 '마감 임박'이면 null")
+    sort_by_deadline: bool = Field(
+        False, description="'마감 임박'·'기한이 얼마 안 남은'처럼 마감이 가까운 순을 원할 때만 true")
+    result_count: Optional[int] = Field(
+        None, description="사용자가 원한 추천 개수(예: '10개'). 말하지 않았으면 null. 검색 도구에는 넘기지 않는다")
 
 
 class Pick(BaseModel):
@@ -31,7 +37,7 @@ class Pick(BaseModel):
 
 
 class Ranking(BaseModel):
-    picks: list[Pick] = Field(description="가장 잘 맞는 순서. 최대 5건, 맞는 게 없으면 빈 리스트")
+    picks: list[Pick] = Field(description="가장 잘 맞는 순서. 요청에 적힌 개수까지, 맞는 게 없으면 빈 리스트")
 
 
 class Project(BaseModel):

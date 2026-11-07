@@ -16,6 +16,8 @@ from agents.state import JobSearchPlan, JobSearchState, Ranking
 log = logging.getLogger(__name__)
 
 TOP_K = 20
+DEFAULT_RESULT_COUNT = 5   # 사용자가 개수를 말하지 않았을 때 추천할 공고 수
+MAX_RESULT_COUNT = 10      # 사용자가 더 많이 원해도 추천하는 최대 공고 수
 BRIEF_LEN = 400   # rerank 프롬프트에 넣는 필드별 최대 글자 수
 SIMILARITY_LOG_LABELS = (("점수", "similarity"), ("하는일", "sim_responsibilities"),
                          ("필수", "sim_required"), ("우대", "sim_preferred"))
@@ -28,12 +30,17 @@ PLAN_PROMPT = (
     "공고 본문에 실제로 적혀 있을 법한 문장으로 쓴다(예: 'PyTorch 실무 경력 3년 이상'). 해당되는 것만, 여러 개 가능. "
     "직무명만 말한 요청이 아니면 최소 하나는 채운다.\n"
     "- 프로필 요약이 주어지고 '나한테 맞는'처럼 본인 기준을 원하면, 프로필의 기술·경험을 q_required/q_preferred에 반영한다.\n"
-    "- category/company_name/location/max_years는 사용자가 명시한 것만.\n\n"
+    "- category/company_name/location/max_years는 사용자가 명시한 것만. 직무명이 category 값(AI Engineer, ML Engineer, "
+    "LLM Engineer, MLOps, Data) 중 하나와 같으면 category만 채우고 title_keywords는 넣지 않는다"
+    "(제목에 그 단어가 없는 공고가 빠진다).\n"
+    "- 마감 조건: '마감 임박'·'기한이 얼마 안 남은'이면 sort_by_deadline=true, '2주 안에'처럼 기간이 있으면 "
+    "deadline_within_days도 채운다. '만료되지 않은'은 기본 동작이라 따로 채우지 않는다. "
+    "사용자가 개수('10개')를 말하면 result_count에 넣는다.\n\n"
 )
 
 
 def _brief(r: dict) -> dict:
-    keys = ("id", "company", "industry", "title", "location", "min_years", "category",
+    keys = ("id", "company", "industry", "title", "location", "min_years", "category", "deadline",
             "responsibilities", "required_qualifications", "preferred_qualifications")
     return {k: (r[k][:BRIEF_LEN] if isinstance(r.get(k), str) else r.get(k)) for k in keys}
 
@@ -79,7 +86,8 @@ def make_graph(tools: dict):
 
     async def retrieve(state: JobSearchState) -> JobSearchState:
         # 값이 있는 파라미터만 넘긴다 (빈 리스트·빈 문자열도 제외)
-        search_args = {k: v for k, v in state["plan"].model_dump().items() if v}
+        # result_count는 추천 개수라서 검색 도구에는 넘기지 않는다
+        search_args = {k: v for k, v in state["plan"].model_dump(exclude={"result_count"}).items() if v}
         raw = await tools["semantic_search_jobs"].ainvoke({**search_args, "limit": TOP_K})
         results = parse_mcp_tool_result(raw)
         log.info("retrieve: semantic_search_jobs 결과 %d건%s", len(results),
@@ -91,15 +99,21 @@ def make_graph(tools: dict):
             cond = state["plan"].model_dump(exclude_none=True)
             return {"candidates": [], "answer": f"현재 조건에 맞는 공고가 없습니다. (검색 조건: {cond})"}
 
-        # 후보 중 최대 5건을 LLM이 고르고, 검색 결과에 없는 id는 버린다
+        # 후보 중 요청한 개수(기본 5건, 최대 10건)를 LLM이 고르고, 검색 결과에 없는 id는 버린다
+        plan = state["plan"]
+        pick_count = min(max(plan.result_count or DEFAULT_RESULT_COUNT, 1), MAX_RESULT_COUNT)
+        deadline_order_rule = (
+            "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고 앞에서부터 요청에 맞는 것을 고른다. "
+            "마감일은 후보의 deadline 필드 값만 쓴다.\n" if plan.sort_by_deadline else "")
         ranking = await ranker.ainvoke(
-            "아래 후보 공고 중 사용자 요청(과 프로필)에 가장 잘 맞는 것을 최대 5건 골라 순서대로 나열하라. "
-            "판단 근거는 공고의 하는 일·필수/우대 역량에 실제로 적힌 내용만 쓴다. 후보에 없는 id는 쓰지 않는다.\n\n"
+            f"아래 후보 공고 중 사용자 요청(과 프로필)에 가장 잘 맞는 것을 최대 {pick_count}건 골라 순서대로 나열하라. "
+            "판단 근거는 공고의 하는 일·필수/우대 역량에 실제로 적힌 내용만 쓴다. 후보에 없는 id는 쓰지 않는다.\n"
+            + deadline_order_rule + "\n"
             f"사용자 프로필 요약: {state.get('profile') or '(없음)'}\n"
             f"요청: {state['question']}\n\n"
             f"후보(JSON):\n{json.dumps([_brief(r) for r in state['results']], ensure_ascii=False)}")
         by_id = {r["id"]: r for r in state["results"]}
-        candidates = [{**by_id[p.id], "reason": p.reason} for p in ranking.picks if p.id in by_id][:5]
+        candidates = [{**by_id[p.id], "reason": p.reason} for p in ranking.picks if p.id in by_id][:pick_count]
         log.info("rerank_explain: 추천 %s", [c["id"] for c in candidates])
 
         if not candidates:

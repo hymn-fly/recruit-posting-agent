@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mcp_server.db import get_company_id_by_name, lifespan, pool  # noqa: E402
+from mcp_server.db import KST_TODAY_SQL, get_company_id_by_name, lifespan, pool  # noqa: E402
 from mcp_server.embeddings import DIM, MODEL, embed_documents, text_hash, to_pg  # noqa: E402
 
 # AI Engineer 관련으로 적재하는 직군. 이 밖의 category는 upsert_job_posting이 거부한다
@@ -338,10 +338,10 @@ async def embed_pending(limit: int = 100) -> dict:
 async def delete_expired_and_urlless_postings_in(conn) -> list[dict]:
     """마감일이 오늘(한국 시간) 이전인 공고와 URL이 없는 공고를 지우고, 지운 공고를 돌려준다."""
     rows = await conn.fetch(
-        """DELETE FROM job_postings j
+        f"""DELETE FROM job_postings j
            USING companies c
            WHERE c.id = j.company_id
-             AND ((j.deadline IS NOT NULL AND j.deadline < (now() AT TIME ZONE 'Asia/Seoul')::date)
+             AND ((j.deadline IS NOT NULL AND j.deadline < {KST_TODAY_SQL})
                   OR j.url IS NULL OR btrim(j.url) = '')
            RETURNING j.id, c.name AS company, j.title, j.url, j.deadline,
                      CASE WHEN j.url IS NULL OR btrim(j.url) = '' THEN 'url_missing' ELSE 'expired' END AS reason""")

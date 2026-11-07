@@ -14,7 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mcp_server.db import get_company_id_by_name, lifespan, pool  # noqa: E402
+from mcp_server.db import KST_TODAY_SQL, get_company_id_by_name, lifespan, pool  # noqa: E402
 from mcp_server.embeddings import embed_query, to_pg  # noqa: E402
 
 mcp = FastMCP("job-query", lifespan=lifespan)
@@ -33,7 +33,8 @@ FIELD_QUERY_TO_EMBEDDING = {
 
 
 def build_posting_filter_conditions(title_keywords, company_name, category, location, max_years,
-                                    only_active) -> tuple[list[str], list]:
+                                    only_active, deadline_within_days=None,
+                                    require_deadline=False) -> tuple[list[str], list]:
     """WHERE로 확정할 수 있는 조건(SQL 조각, 바인딩 값)을 만든다. 값은 모두 $n 파라미터로 넘긴다."""
     conditions, args = [], []
 
@@ -52,8 +53,13 @@ def build_posting_filter_conditions(title_keywords, company_name, category, loca
         add("j.location ILIKE ${n}", f"%{location}%")
     if max_years is not None:
         add("(j.min_years IS NULL OR j.min_years <= ${n})", int(max_years))
-    if only_active:
+    if only_active:   # 활성이면서 마감이 지나지 않은 공고(마감일이 없는 상시 공고는 포함)
         conditions.append("j.is_active")
+        conditions.append(f"(j.deadline IS NULL OR j.deadline >= {KST_TODAY_SQL})")
+    if require_deadline:   # 마감일이 적혀 있는 공고만
+        conditions.append("j.deadline IS NOT NULL")
+    if deadline_within_days is not None:   # 오늘부터 N일 안에 마감 (마감일이 없는 공고는 빠진다)
+        add(f"j.deadline BETWEEN {KST_TODAY_SQL} AND {KST_TODAY_SQL} + ${{n}}::int", int(deadline_within_days))
     return conditions, args
 
 
@@ -79,12 +85,19 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
                                category: Optional[str] = None,
                                location: Optional[str] = None,
                                max_years: Optional[int] = None,
+                               deadline_within_days: Optional[int] = None,
+                               sort_by_deadline: bool = False,
                                only_active: bool = True, limit: int = 20) -> list[dict]:
     """채용공고 검색: WHERE 조건으로 먼저 거른 뒤, 남은 공고 전부를 컬럼별 임베딩으로 정확히 비교한다.
 
     필터(정확히 일치/부분일치):
       title_keywords: 직무명 키워드(예: ["MLOps", "엠엘옵스"]). 제목에 하나라도 들어간 공고만.
       company_name / category / location: 부분일치. max_years: 요구 최소 경력이 이 값 이하(또는 명시 없음).
+      deadline_within_days: 오늘(한국 시간)부터 N일 안에 마감하는 공고만. 마감일이 없는 상시 공고는 빠진다.
+      only_active=True(기본)이면 마감이 지난 공고는 항상 빠진다(마감일이 없는 상시 공고는 남는다).
+    정렬:
+      sort_by_deadline=True: 마감일이 적힌 공고만, 마감이 가까운 순으로 돌려준다('마감 임박'을 물을 때).
+        이때는 의미 검색 점수를 계산하지 않고(q_* 무시) similarity는 None이다.
     의미 검색(각 질의를 해당 컬럼 임베딩과 cosine 유사도로 비교, 주어진 것만):
       q_responsibilities ↔ 하는 일, q_required ↔ 필수 역량, q_preferred ↔ 우대 역량.
       공고 본문에 적혀 있을 법한 문장으로 쓴다. 예) q_required="Kubernetes 기반 서비스 운영 경험"
@@ -95,12 +108,13 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
 
     # 1) WHERE로 확정할 수 있는 조건부터 건다
     conditions, args = build_posting_filter_conditions(
-        title_keywords, company_name, category, location, max_years, only_active)
+        title_keywords, company_name, category, location, max_years, only_active,
+        deadline_within_days, require_deadline=sort_by_deadline)
 
     # 2) 주어진 의미 검색 질의만 임베딩해서, 해당 컬럼과의 유사도 SELECT 식을 만든다
     field_queries = {"q_responsibilities": q_responsibilities, "q_required": q_required,
                      "q_preferred": q_preferred}
-    asked_fields = [name for name, text in field_queries.items() if text and text.strip()]
+    asked_fields = [] if sort_by_deadline else [name for name, text in field_queries.items() if text and text.strip()]
     query_vectors = await asyncio.gather(*(embed_query(field_queries[name]) for name in asked_fields))
     similarity_selects, similarity_keys = [], []
     for name, vector in zip(asked_fields, query_vectors):
@@ -115,12 +129,17 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
         ["j.id", "c.name AS company", "c.industry", "j.title", "j.url", "j.location", "j.employment_type",
          "j.min_years", "j.category", "j.responsibilities", "j.required_qualifications",
          "j.preferred_qualifications", "j.deadline"] + similarity_selects)
-    order_and_limit = "" if similarity_keys else f"ORDER BY j.last_seen_at DESC LIMIT {limit}"
+    if sort_by_deadline:
+        order_and_limit = f"ORDER BY j.deadline ASC, j.last_seen_at DESC LIMIT {limit}"
+    elif similarity_keys:
+        order_and_limit = ""
+    else:
+        order_and_limit = f"ORDER BY j.last_seen_at DESC LIMIT {limit}"
     p = await pool()
     rows = [_row(r) for r in await p.fetch(
         f"SELECT {select_columns} FROM job_postings j JOIN companies c ON c.id = j.company_id "
         f"{where} {order_and_limit}", *args)]
-    if not similarity_keys:
+    if sort_by_deadline or not similarity_keys:
         return [{**row, "similarity": None} for row in rows]
 
     # 4) 컬럼별 유사도를 점수로 합쳐 높은 순으로 자른다 (점수가 None인 공고는 뺀다)

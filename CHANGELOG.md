@@ -360,6 +360,18 @@
   - `GOOGLE_API_KEY`는 Gemma LLM 호출(`agents/llm.py`)에 계속 쓰므로 지우면 안 된다.
   - 768차원으로 줄여 받은 것이라 기본 1536차원보다 품질이 약간 낮을 수 있다. 검색 결과는 눈으로 확인했지만 정량 비교는 하지 않았다.
 
+### #35 "마감 임박 공고 N개" 요청이 빈 결과·1건으로 나오던 문제 수정 (마감일 필터·정렬, 추천 개수)
+- **무엇을**:
+  - `semantic_search_jobs`에 `deadline_within_days`(오늘부터 N일 안에 마감), `sort_by_deadline`(마감일이 있는 공고만, 마감이 가까운 순)을 추가했다. `sort_by_deadline`이면 의미 검색(`q_*`)과 임베딩 호출을 건너뛴다.
+  - `only_active`(기본)가 이제 마감이 지난 공고도 뺀다. 마감일이 없는 상시 공고는 남는다. 삭제 tool이 다음 예약 작업 때 지우기 전까지 만료 공고가 검색에 섞이던 것을 막는다.
+  - `agents/state.py`의 `JobSearchPlan`에 `deadline_within_days`, `sort_by_deadline`, `result_count`를 추가했다. `result_count`(요청한 개수)는 검색 도구에 넘기지 않는다.
+  - `agents/graphs/job_search_graph.py`: `_brief`에 `deadline`을 넣었고, 추천 개수를 요청대로(기본 5, 최대 10) 따르게 했다. 마감순 요청이면 재순위 프롬프트에 "정렬된 순서를 바꾸지 말고 deadline 필드 값만 쓴다"를 넣었다. 플래너 프롬프트에 마감 조건 규칙을 추가하고, 직무명이 category 값과 같으면 `title_keywords`를 넣지 않게 했다.
+  - `mcp_server/db.py`에 `KST_TODAY_SQL`을 두고 검색과 삭제 tool이 같이 쓴다.
+- **왜**: 같은 질문("AI Engineer 직무 공고들 중 만료되지 않았고 기한이 얼마 안 남은 공고 10개")을 재현했더니 DB에 정답 10건이 있는데 1건만 나왔다. 원인은 세 가지였다. ① 검색이 마감일을 몰라서 "최근 확인 순 20건"을 돌려줬고 정답 10건 중 3건만 들어 있었다. ② `_brief`에 `deadline`이 없어서 재순위 LLM이 마감일을 모른 채 본문에서 지어낸 근거("프로젝트 시작 시점이 11월 중순")로 1건만 골랐다. 마감을 판단할 수 없으면 빈 목록이 나올 수 있다. ③ 추천 상한이 5건으로 코드에 박혀 있어 10개 요청은 불가능했다. 또 플래너가 "AI Engineer"를 `category`와 `title_keywords` 둘 다에 넣어, 제목에 AI가 없는 공고(예: Forward Deployed Engineer)가 빠졌다.
+- **변경**: `mcp_server/query_server.py`, `mcp_server/db.py`, `mcp_server/collect_server.py`(KST 상수 사용만), `agents/state.py`, `agents/graphs/job_search_graph.py`, `tests/unit_tests/test_search_filters.py`, `tests/unit_tests/test_job_search_agent.py`
+- **검증**: 같은 질문을 실제 DB·LLM으로 다시 돌려 마감 임박순 10건(11-11 ~ 11-29)이 나왔고, DB에서 직접 뽑은 정답과 같았다. 단위 테스트 추가(마감 필터 조건, 마감순 요청의 검색 인자·추천 10건·프롬프트에 마감일 포함, 개수 기본 5/상한 10). `uv run pytest` 32 passed / 5 skipped.
+- **알아둘 점**: 이 변경은 `job-query` 서버 코드라서 채팅을 다시 시작해야 반영된다. 플래너가 `sort_by_deadline`을 채우는 것은 LLM 판단이라 표현에 따라 달라질 수 있다.
+
 ---
 
 ## 미해결 / 다음 후보
