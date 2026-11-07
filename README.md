@@ -27,7 +27,7 @@ make-agents/
 | 파일 | 역할 |
 |---|---|
 | `supervisor.py` | **Supervisor**. 라우터 LLM이 다음 Agent를 고르고, "2번 공고"를 추천 목록에서 찾아 선택. 한 턴 최대 3개 Agent, Agent별 MCP 도구 제한 |
-| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(직무명 → 제목 키워드 필터, 하는 일/필수/우대 → 컬럼별 의미 검색 질의) → `retrieve`(`semantic_search_jobs` 상위 20건) → `rerank_explain`(LLM이 5건 선택·근거) |
+| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(직무명 → 제목 키워드 필터, 하는 일/필수/우대 → 컬럼별 의미 검색 질의) → `retrieve`(`semantic_search_jobs` 상위 20건, 마감 임박 요청이면 마감순) → `rerank_explain`(LLM이 요청한 개수만큼 선택·근거, 기본 5건·최대 10건) |
 | `company_research_graph.py` | **기업분석 Agent**. `plan_queries`(실제 계열사·산업·경쟁사, 토픽별 검색어) → `load_cache`(14일) → `search_topic`×N(Tavily 병렬) → `synthesize`(리포트·출처) |
 | `profile_gap_graph.py` | **내 프로필 Agent**. `load` → `decompose`(요구사항 분해) → `match`(요구사항별 이력서 근거 검색·판정) → `synthesize`(강점/부족한 점/보완 방법) |
 
@@ -272,8 +272,10 @@ uv run python agents/main_chat.py
 > 3번 공고 기업분석하고 내 부족한 점도        # 여러 Agent를 순서대로 실행
 ```
 - 명령: `/select N`(추천 N번 선택), `/id ID`(공고 id로 선택), `/reset`, `/quit`
-- 필요 키: `GOOGLE_API_KEY`(LLM·임베딩), `OPENAI_API_KEY`(폴백), `TAVILY_API_KEY`(기업분석), `NEON_DATABASE_URL`
+- 필요 키: `GOOGLE_API_KEY`(LLM), `OPENAI_API_KEY`(임베딩·LLM 폴백, ChatGPT Plus와 별개인 API 결제), `TAVILY_API_KEY`(기업분석), `NEON_DATABASE_URL`
 - 공고 검색(`semantic_search_jobs`): ① 직무명(`title_keywords`)·회사·직군·지역·최대 경력을 **WHERE로 먼저 거르고**
   ② 남은 공고 전부를 하는 일/필수/우대 질의문(`q_responsibilities`/`q_required`/`q_preferred`)과 **해당 컬럼 임베딩**으로 정확 비교한 뒤
   ③ `score_posting_by_field_similarity`로 합친 점수 순으로 돌려준다. 결과에 질의한 컬럼의 `sim_*`가 포함된다.
+  마감이 지난 공고는 항상 빠지고(마감일 없는 상시 공고는 유지), `deadline_within_days`(N일 안 마감)와
+  `sort_by_deadline`(마감일이 있는 공고만 마감 임박순)으로 "기한이 얼마 안 남은 공고"를 물을 수 있다.
 - 새로 적재된 공고는 `embed_pending_postings`(예약 작업 마지막 단계) 또는 `uv run python scripts/embed_postings.py`로 임베딩해야 검색된다.
