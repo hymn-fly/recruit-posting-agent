@@ -38,7 +38,7 @@ make-agents/
 | `collect_server.py` | **`job-db`** MCP 서버(공고 수집 전용, 예약 작업이 씀). 회사·공고(`upsert_company`, `upsert_job_posting`, `list_companies`, `find_active_postings_by_company_and_title`), 본 공고 확인·갱신(`list_known_urls`, `list_filtered_urls`, `touch_postings`: **사이트 URL 기준**), 필터 기록(`record_filtered_postings`), 크롤링 기록(`record_scrape_run`, `list_latest_scrape_status_by_source`), 정리(`delete_expired_and_urlless_postings`: 마감 지난 공고·URL 없는 공고 삭제), 임베딩(`embed_pending_postings`) |
 | `query_server.py` | **`job-query`** MCP 서버(조회·분석 전용, 대화형 에이전트가 씀). 검색(`semantic_search_jobs`), 공고 상세(`get_job_posting`), 리서치 캐시(`get_cached_research`, `save_research`). 예약 작업에는 등록하지 않음 |
 | `profile_server.py` | **`profile-db`** MCP 서버. 개인 자료 읽기 전용(`get_profile_summary`, `search_profile`, `list_profile_documents`). 예약 작업에는 등록하지 않아 이력서가 노출되지 않음 |
-| `embeddings.py` | Gemini 임베딩(768차원) `embed_documents`/`embed_query`, 무료 티어 대응 배치·재시도, pgvector 변환, 해시 |
+| `embeddings.py` | OpenAI 임베딩(`text-embedding-3-small`, 768차원) `embed_documents`/`embed_query`, 배치·타임아웃·재시도, pgvector 변환, 해시 |
 
 ### `db/schema.sql`: 테이블
 | 테이블 | 용도 | 사용 |
@@ -99,8 +99,8 @@ flowchart LR
     end
 
     subgraph Ext["외부 API"]
-        GEM["Gemini<br/>LLM(Gemma) + 임베딩"]
-        OAI["OpenAI<br/>LLM 폴백"]
+        GEM["Gemini<br/>LLM(Gemma)"]
+        OAI["OpenAI<br/>임베딩 + LLM 폴백"]
         TAV["Tavily<br/>웹 검색"]
     end
 
@@ -119,9 +119,9 @@ flowchart LR
     JDB --> DB
     JQ --> DB
     PDB --> DB
-    JDB -. "공고 임베딩" .-> GEM
-    JQ -. "질의 임베딩" .-> GEM
-    PDB -. "질의 임베딩" .-> GEM
+    JDB -. "공고 임베딩" .-> OAI
+    JQ -. "질의 임베딩" .-> OAI
+    PDB -. "질의 임베딩" .-> OAI
     Chat -. "LLM 호출 (agents/llm.py)" .-> GEM
     Chat -. "Gemma 실패 시" .-> OAI
 ```
@@ -134,7 +134,7 @@ sequenceDiagram
     participant Web as 채용 포털
     participant JDB as job-db MCP
     participant DB as Neon DB
-    participant GEM as Gemini 임베딩
+    participant GEM as OpenAI 임베딩
 
     CD->>JDB: list_companies()
     JDB->>DB: SELECT companies
@@ -232,7 +232,8 @@ sequenceDiagram
     autonumber
     actor U as 사용자
     participant S as scripts/ingest_profile.py
-    participant GEM as Gemini
+    participant EMB as OpenAI 임베딩
+    participant GEM as Gemini (LLM)
     participant DB as Neon DB
 
     U->>S: 파일 경로 + --kind
@@ -242,7 +243,7 @@ sequenceDiagram
         S-->>U: 변경 없음 — 건너뜀
     else 신규 또는 변경
         S->>S: 문단 우선 청킹 (약 800자, 100자 겹침)
-        S->>GEM: 조각 임베딩
+        S->>EMB: 조각 임베딩
         S->>DB: profile_documents upsert, profile_chunks 교체
         S->>GEM: 전체 문서 → 구조화 프로필 요약 (LLM)
         S->>DB: profile_summary 갱신

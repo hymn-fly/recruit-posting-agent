@@ -75,10 +75,10 @@ COMMENT ON COLUMN job_postings.is_active                IS '현재 열려 있는
 COMMENT ON COLUMN job_postings.first_seen_at            IS '이 공고를 처음 발견한 시각 (신규 공고 판별 기준)';
 COMMENT ON COLUMN job_postings.last_seen_at             IS '가장 최근 스크래핑에서 확인된 시각';
 
--- RAG 검색용 임베딩 (gemini-embedding-001, 768차원). embed_pending_postings가 채운다
+-- RAG 검색용 임베딩 (OpenAI text-embedding-3-small, 768차원). embed_pending_postings가 채운다
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding      vector(768);
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS embedding_hash TEXT;
-COMMENT ON COLUMN job_postings.embedding      IS '제목·직군·하는 일·필수/우대 역량을 합친 텍스트의 임베딩 (gemini-embedding-001, 768차원). RAG 검색용';
+COMMENT ON COLUMN job_postings.embedding      IS '제목·직군·하는 일·필수/우대 역량을 합친 텍스트의 임베딩 (OpenAI text-embedding-3-small, 768차원). RAG 검색용';
 COMMENT ON COLUMN job_postings.embedding_hash IS '임베딩 버전 + 통합/컬럼별 원문의 sha256. 본문이나 임베딩 방식이 바뀌면 값이 달라져 재임베딩 대상';
 
 CREATE INDEX IF NOT EXISTS idx_job_postings_embedding
@@ -194,7 +194,7 @@ COMMENT ON COLUMN profile_chunks.id          IS '조각 고유 번호 (자동 �
 COMMENT ON COLUMN profile_chunks.document_id IS '원본 문서 (profile_documents.id 참조, 문서 삭제/교체 시 함께 삭제)';
 COMMENT ON COLUMN profile_chunks.chunk_index IS '문서 안에서의 순서 (0부터)';
 COMMENT ON COLUMN profile_chunks.text        IS '조각 원문 (약 800자, 앞 조각과 100자 겹침)';
-COMMENT ON COLUMN profile_chunks.embedding   IS '조각 임베딩 (gemini-embedding-001, 768차원)';
+COMMENT ON COLUMN profile_chunks.embedding   IS '조각 임베딩 (OpenAI text-embedding-3-small, 768차원)';
 
 CREATE INDEX IF NOT EXISTS idx_profile_chunks_embedding
     ON profile_chunks USING hnsw (embedding vector_cosine_ops);

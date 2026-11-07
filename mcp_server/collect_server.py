@@ -13,7 +13,7 @@ from mcp.server.fastmcp import FastMCP
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp_server.db import get_company_id_by_name, lifespan, pool  # noqa: E402
-from mcp_server.embeddings import embed_documents, text_hash, to_pg  # noqa: E402
+from mcp_server.embeddings import DIM, MODEL, embed_documents, text_hash, to_pg  # noqa: E402
 
 # AI Engineer 관련으로 적재하는 직군. 이 밖의 category는 upsert_job_posting이 거부한다
 ALLOWED_CATEGORIES = ("AI Engineer", "ML Engineer", "LLM Engineer", "MLOps", "Data")
@@ -289,7 +289,7 @@ def _posting_text(r) -> str:
 
 
 # 임베딩 방식이 바뀌면 올린다 (hash가 달라져 전체 재임베딩됨)
-EMBED_VERSION = "v3-fields-raw"
+EMBED_VERSION = f"v4-fields-raw-{MODEL}-{DIM}"
 FIELD_COLUMNS = ("responsibilities", "required_qualifications", "preferred_qualifications")
 
 

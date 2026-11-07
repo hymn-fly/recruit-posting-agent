@@ -345,6 +345,21 @@
 - **검증**: `--transport streamable-http --port 8765`로 띄워 MCP 클라이언트로 붙어 tool 12개 목록과 `list_latest_scrape_status_by_source` 호출 성공을 확인했다. `langchain_mcp_adapters`(`transport: streamable_http`)로도 12개를 로딩했다. 옵션 없이 실행하는 stdio 경로는 그대로이며 `get_tools()`가 세 서버 합쳐 19개를 로딩했다. 종료 후 포트가 정리됨을 확인했다.
 - **주의**: host는 옵션으로 열지 않고 `127.0.0.1`로 고정했다. 인증이 없고 저장·삭제 tool이 있어서다. 외부에 열려면 인증(리버스 프록시 등)을 먼저 붙여야 한다. Claude Desktop 설정 파일은 stdio 명령 실행만 지원하므로 HTTP 연결에는 별도 브리지가 필요하며(미검증), 기존 stdio 설정은 그대로 쓸 수 있다.
 
+### #34 임베딩을 Gemini `gemini-embedding-001`에서 OpenAI `text-embedding-3-small`(768차원)로 교체하고 전체 재임베딩
+- **무엇을**:
+  - `mcp_server/embeddings.py`: `OpenAIEmbeddings(model="text-embedding-3-small", dimensions=768, timeout=30, max_retries=3)`로 교체. 문서/질의 `task_type` 구분은 OpenAI에 없어 같은 방식으로 임베딩한다. Gemini 무료 티어용 60초 대기·3회 재시도 루프를 지웠다.
+  - `EMBED_VERSION`을 `f"v4-fields-raw-{MODEL}-{DIM}"`로 바꿔 모델·차원이 해시에 들어가게 했다. 앞으로 모델을 바꾸면 전체가 자동으로 재임베딩 대상이 된다.
+  - `scripts/embed_postings.py`로 활성 공고 358건(텍스트 1,245개)을 전부 다시 임베딩했다(40초).
+  - 스키마 주석(`db/schema.sql`과 DB의 `COMMENT`), README의 설명·다이어그램을 갱신했다.
+- **왜**: Gemini 무료 티어의 하루 1,000건 한도를 넘겨 `429 RESOURCE_EXHAUSTED`가 나는데, 코드가 하루 한도에도 분당 한도용 60초 재시도를 3번 돌아서 `embed_pending_postings`가 3분 넘게 멈추다 클라이언트 timeout으로 보였다. 공고 하나당 최대 4개 텍스트라 전체 임베딩만으로 하루 한도를 넘겼고, 같은 한도를 쓰는 검색 질의 임베딩까지 막혔다.
+- **변경**: `mcp_server/embeddings.py`, `mcp_server/collect_server.py`(`EMBED_VERSION`), `db/schema.sql`, `README.md`
+- **검증**: `dimensions=768`로 문서 3개와 질의 1개를 임베딩해 차원 768과 유사도 순서(MLOps > LLM > 요리)를 확인했다. 재임베딩 후 다시 해시를 계산해 남은 대상이 0건임을 확인했고, 통합 벡터 358/358, 차원 768이었다. 실제 `semantic_search_jobs`로 `q_required="Kubernetes 기반 서비스 운영 경험"`은 ML 플랫폼 공고, `q_preferred="논문 게재 경험"`은 연구소 공고를 위로 돌려줬다. `uv run pytest` 통과.
+- **주의**:
+  - OpenAI API는 ChatGPT Plus와 별개 결제다. `.env`의 `OPENAI_API_KEY`에 사용 가능한 키가 있어야 한다(이전 키는 만료였다).
+  - 기존 Gemini 벡터는 덮어썼다. Gemini로 되돌리려면 `embeddings.py`를 되돌리고 다시 전체 임베딩해야 한다(`EMBED_VERSION`이 달라 자동 대상이 된다).
+  - `GOOGLE_API_KEY`는 Gemma LLM 호출(`agents/llm.py`)에 계속 쓰므로 지우면 안 된다.
+  - 768차원으로 줄여 받은 것이라 기본 1536차원보다 품질이 약간 낮을 수 있다. 검색 결과는 눈으로 확인했지만 정량 비교는 하지 않았다.
+
 ---
 
 ## 미해결 / 다음 후보
