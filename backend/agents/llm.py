@@ -37,14 +37,14 @@ class LLM:
     """`ainvoke(prompt)` 하나로 쓰는 래퍼. schema를 주면 구조화 출력(pydantic)을 돌려준다."""
 
     def __init__(self, max_output_tokens: int | None = None, schema=None,
-                 primary: str = PRIMARY_MODEL, fallback: str = FALLBACK_MODEL,
+                 primary_llm: str = PRIMARY_MODEL, fallback_llm: str = FALLBACK_MODEL,
                  primary_timeout: float = PRIMARY_TIMEOUT):
         self.schema_name = schema.__name__ if schema is not None else "text"
-        self.primary_name, self.fallback_name = primary, fallback
+        self.primary_name, self.fallback_name = primary_llm, fallback_llm
         self.primary_timeout = primary_timeout
 
-        self._primary = make_chat(primary, max_output_tokens)
-        self._fallback = make_chat(fallback, max_output_tokens)
+        self._primary = make_chat(primary_llm, max_output_tokens)
+        self._fallback = make_chat(fallback_llm, max_output_tokens)
         
         if schema is not None:
             self._primary = self._primary.with_structured_output(schema)
