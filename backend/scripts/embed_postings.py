@@ -4,7 +4,7 @@ import logging
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path[:0] = [str(Path(__file__).resolve().parents[2]), str(Path(__file__).resolve().parents[1])]  # 저장소 루트(mcp_server, common) + backend(agents)
 
 from mcp_server import collect_server  # noqa: E402
 

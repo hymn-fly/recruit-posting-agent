@@ -16,7 +16,7 @@ from mcp.server.fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agents.observability import configure_logging  # noqa: E402
+from common.observability import configure_logging  # noqa: E402
 
 log = logging.getLogger(__name__ if __name__ != "__main__" else "mcp_server.query_server")
 

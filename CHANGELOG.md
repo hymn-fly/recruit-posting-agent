@@ -396,6 +396,18 @@
 - **검증**: `scrapers`·`seed_companies` 참조가 코드에 남아 있지 않은지 grep으로 확인했다(남은 곳은 PLAN.md와 CHANGELOG의 과거 기록뿐).
 - **주의**: 새 DB를 만들면 `companies`를 다시 채울 방법이 코드에 없다. 필요하면 git 이력(`e97d754`)에서 `scrapers/companies.py`를 복원한다.
 
+### #39 폴더 구조 정리: `backend/` 신설, `common/` 분리, `db/`를 `mcp_server/sql/`로, 대화 CLI 제거
+- **무엇을**: 최상위를 `frontend` / `backend` / `mcp_server` 3개 중심으로 정리했다.
+  - `agents/`, `api/`, `scripts/`, `tests/`를 `backend/` 아래로 옮겼다(`git mv`로 이력 보존).
+  - `agents/observability.py`를 `common/observability.py`로 옮겼다. `backend`와 `mcp_server`가 함께 쓰는 코드라서, `mcp_server`가 `agents`를 import하던 역방향 의존을 없앴다.
+  - `db/`(스키마·마이그레이션)를 `mcp_server/sql/`로 옮겼다. `mcp_server/db.py` 모듈과 이름이 겹치지 않게 `sql`로 했다.
+  - 웹 UI가 생겨 쓰지 않는 대화 CLI `agents/main_chat.py`를 삭제했다. README의 CLI 사용법·`/select` 등 명령 안내와 `cli.log` 언급도 지웠다.
+  - 경로 계산을 새 깊이에 맞게 고쳤다: `backend/agents/mcp_client.py`의 `ROOT`(`parents[2]`), `backend/scripts/*`의 `sys.path`(저장소 루트 + `backend`), 통합 테스트 `conftest.py`의 `.env` 경로(`parents[3]`). `pyproject.toml`은 `pythonpath = ["backend", "."]`, `testpaths = ["backend/tests"]`로 바꿨다. 그래서 `from agents...`, `from mcp_server...` import 줄은 바뀌지 않았고, `observability`만 `from common.observability`로 바꿨다.
+- **왜**: 프로세스 경계(웹 프론트 / 백엔드 / MCP 서버)와 폴더 경계를 맞추고, `mcp_server`가 `backend` 코드에 기대지 않게 하려고.
+- **변경 파일**: `backend/**`, `common/**`, `mcp_server/sql/**`(이동), `agents/main_chat.py`(삭제), `backend/api/main.py`·`mcp_server/query_server.py`(import), `backend/agents/mcp_client.py`, `backend/scripts/*.py`, `backend/tests/integration_tests/conftest.py`, `pyproject.toml`, `mcp_server/embeddings.py`·`mcp_server/sql/schema.sql`(주석 경로), `README.md`, `frontend/README.md`, `prompts/daily_ingest.md`
+- **검증**: `uv run pytest` 36 passed / 5 skipped. `PYTHONPATH=backend:. uv run uvicorn api.main:app`가 기동하고(`/docs` 200) MCP 서버 3개에서 도구 19개를 불러왔다. `open_tools()`로 `ROOT`가 저장소 루트를 가리키는지도 확인했다.
+- **주의**: FastAPI 실행 명령이 바뀌었다. `PYTHONPATH=backend:. uv run uvicorn api.main:app --host 127.0.0.1 --port 8000`(저장소 루트에서). 스크립트는 `uv run python backend/scripts/<이름>.py`. 확인 중 `embed_postings.py`를 실제로 한 번 실행해 미임베딩 공고 12건을 임베딩했다(`--help` 옵션이 없어 그대로 실행됨. 예약 작업이 하는 백필과 같은 동작).
+
 ---
 
 ## 미해결 / 다음 후보

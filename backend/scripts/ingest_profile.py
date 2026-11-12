@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path[:0] = [str(Path(__file__).resolve().parents[2]), str(Path(__file__).resolve().parents[1])]  # 저장소 루트(mcp_server, common) + backend(agents)
 
 from mcp_server import db  # noqa: E402
 from mcp_server.embeddings import embed_documents, text_hash, to_pg  # noqa: E402

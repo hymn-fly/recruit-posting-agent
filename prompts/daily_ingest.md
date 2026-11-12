@@ -86,7 +86,7 @@ uv run python mcp_server/collect_server.py --transport streamable-http --port 80
 
 - `127.0.0.1`에서만 받는다. 인증이 없고 저장·삭제 tool이 있어서 외부에 열지 않는다.
 - Claude Code: `claude mcp add --transport http job-db http://127.0.0.1:8000/mcp`
-- 이 프로젝트의 에이전트: `agents/mcp_client.py`의 연결을 `{"transport": "streamable_http", "url": "http://127.0.0.1:8000/mcp"}`로 바꾼다.
+- 이 프로젝트의 에이전트: `backend/agents/mcp_client.py`의 연결을 `{"transport": "streamable_http", "url": "http://127.0.0.1:8000/mcp"}`로 바꾼다.
 
 ## 사전 준비
 

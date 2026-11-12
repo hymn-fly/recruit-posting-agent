@@ -6,7 +6,7 @@ from pathlib import Path
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트 (backend/agents/ 기준 두 단계 위)
 
 
 def make_client() -> MultiServerMCPClient:

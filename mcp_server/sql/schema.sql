@@ -1,5 +1,5 @@
 -- Neon Postgres 스키마: 채용공고 적재/조회 에이전트용
--- 적용: psql "$NEON_DATABASE_URL" -f db/schema.sql
+-- 적용: psql "$NEON_DATABASE_URL" -f mcp_server/sql/schema.sql
 
 -- (선택) 나중에 임베딩 기반 유사도 검색을 붙일 때를 위해 pgvector를 켜둡니다. 지금은 안 써도 됩니다.
 CREATE EXTENSION IF NOT EXISTS vector;

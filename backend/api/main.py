@@ -12,7 +12,7 @@ from fastapi.encoders import jsonable_encoder
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 
-from agents.observability import configure_logging, request_id
+from common.observability import configure_logging, request_id
 from agents.graphs.supervisor import make_graph, turn_input
 from agents.mcp_client import open_tools
 from mcp_server import db

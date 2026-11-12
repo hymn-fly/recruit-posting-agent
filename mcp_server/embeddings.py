@@ -11,7 +11,7 @@ from langchain_openai import OpenAIEmbeddings
 log = logging.getLogger("mcp_server.embeddings")
 
 MODEL = "text-embedding-3-small"   # OPENAI_API_KEY 필요 (ChatGPT Plus와 별개인 API 결제)
-DIM = 768                          # db/schema.sql의 vector(768)과 같아야 한다. text-embedding-3의 dimensions 옵션으로 줄여 받는다
+DIM = 768                          # mcp_server/sql/schema.sql의 vector(768)과 같아야 한다. text-embedding-3의 dimensions 옵션으로 줄여 받는다
 BATCH = 100                        # 한 번에 보낼 텍스트 수
 REQUEST_TIMEOUT = 30               # 초. 응답이 없으면 이 시간 뒤 실패한다
 MAX_RETRIES = 3                    # 일시적인 429·5xx는 SDK가 짧게 백오프하며 재시도한다. 한도 소진(insufficient_quota)은 몇 초 안에 실패로 끝난다

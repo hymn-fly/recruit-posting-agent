@@ -8,7 +8,7 @@ Next.js + React + HeroUI v3 프론트와 기존 Python 에이전트를 연결한
 
 ```bash
 uv sync
-uv run uvicorn api.main:app --host 127.0.0.1 --port 8000
+PYTHONPATH=backend:. uv run uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
 다른 터미널에서:
@@ -24,7 +24,7 @@ npm start -- --hostname 127.0.0.1
 
 개발 모드는 `npm run dev -- --hostname 127.0.0.1`입니다. FastAPI 주소가 다르면 `frontend/.env.local`의 `API_BASE_URL`을 지정한 뒤 프론트를 다시 빌드/시작하세요. 기본값은 `http://127.0.0.1:8000`입니다.
 
-루트 `.env`는 기존 에이전트와 같은 DB·모델·임베딩 설정을 사용합니다. 산업·기업 조사는 `TAVILY_API_KEY`가 필요합니다. `db/schema.sql` 및 기존 마이그레이션이 적용된 DB를 사용하세요. 앱은 자동으로 DB 스키마를 변경하지 않습니다.
+루트 `.env`는 기존 에이전트와 같은 DB·모델·임베딩 설정을 사용합니다. 산업·기업 조사는 `TAVILY_API_KEY`가 필요합니다. `mcp_server/sql/schema.sql` 및 기존 마이그레이션이 적용된 DB를 사용하세요. 앱은 자동으로 DB 스키마를 변경하지 않습니다.
 
 ## 사용 순서
 
@@ -51,7 +51,7 @@ npm start -- --hostname 127.0.0.1
 
 ## 처리 로그
 
-FastAPI를 재시작하면 터미널과 `logs/app.log`에 요청별 로그가 남습니다. 각 HTTP 요청은 `request=<ID>`로 묶이며, 응답의 `X-Request-ID` 헤더에도 같은 ID가 포함됩니다. MCP 검색 서버의 DB 필터·임베딩·검색 결과 건수는 `logs/job-query.log`에 남습니다. 터미널 CLI는 `logs/cli.log`에 남습니다. 로그는 파일당 약 5MB, 이전 파일 3개까지 보관합니다.
+FastAPI를 재시작하면 터미널과 `logs/app.log`에 요청별 로그가 남습니다. 각 HTTP 요청은 `request=<ID>`로 묶이며, 응답의 `X-Request-ID` 헤더에도 같은 ID가 포함됩니다. MCP 검색 서버의 DB 필터·임베딩·검색 결과 건수는 `logs/job-query.log`에 남습니다. 로그는 파일당 약 5MB, 이전 파일 3개까지 보관합니다.
 
 프로젝트 루트의 별도 터미널에서:
 
