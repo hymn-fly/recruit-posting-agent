@@ -281,3 +281,8 @@ uv run python agents/main_chat.py
   `sort_by_deadline`과 `q_*`를 함께 주면 유사도 상위 `limit`건을 고른 뒤 그 안에서 마감이 가까운 순으로 정렬한다.
   추천 개수는 `agents/graphs/job_search_graph.py`의 `DEFAULT_RESULT_COUNT`(5)·`MAX_RESULT_COUNT`(10)로 정한다.
 - 새로 적재된 공고는 `embed_pending_postings`(예약 작업 마지막 단계) 또는 `uv run python scripts/embed_postings.py`로 임베딩해야 검색된다.
+
+## 웹 워크스페이스
+
+`frontend/`(Next.js + HeroUI)와 `api/`(FastAPI)에서 공고 조회, 에이전트 채팅, 공고별 산업·기업 조사, 이력서·포트폴리오 업로드 및 역량 분석을 제공합니다.
+실행 방법과 개인용 데이터 저장 범위는 [frontend/README.md](frontend/README.md)를 참고하세요.
