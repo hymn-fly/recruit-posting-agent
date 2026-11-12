@@ -1,0 +1,61 @@
+/* 디자인 시스템(Tailwind 4 + HeroUI v3 + axhub design-system)은 axhub.css 가 전부 가져와요.
+   axhub.css 는 자동 생성이라 고치지 않아요. 이 앱에만 필요한 CSS 가 꼭 있으면 아래에 더하세요
+   (대부분은 Tailwind 클래스로 충분해요 — 화면 전용 CSS 파일은 만들지 않아요). */
+@import "./axhub.css";
+
+.report {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+  line-height: 1.8;
+}
+.report h1,
+.report h2,
+.report h3 {
+  font-weight: 650;
+  margin: 1.4em 0 0.6em;
+}
+.report h1 {
+  font-size: 1.3rem;
+}
+.report h2 {
+  font-size: 1.15rem;
+}
+.report p,
+.report ul,
+.report ol {
+  margin: 0.7em 0;
+}
+.report ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.report ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.report a {
+  color: var(--fg-accent);
+  text-decoration: underline;
+}
+.report table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+.report th,
+.report td {
+  border: 1px solid var(--border-default);
+  padding: 0.5em 0.7em;
+  text-align: left;
+}
+.report pre {
+  overflow-x: auto;
+  padding: 1em;
+  background: var(--bg-muted);
+  border-radius: 8px;
+}
+.chat-history {
+  max-height: 560px;
+  overflow-y: auto;
+}

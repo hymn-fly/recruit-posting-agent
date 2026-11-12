@@ -1,0 +1,75 @@
+/* ══════════════════════════════════════════════════════════════════════════
+ * axhub 디자인 시스템 진입점
+ *
+ * ⚠️ 이 파일은 자동 생성돼요. 직접 고치지 마세요.
+ *    정본: axhub-template 레포의 design/axhub.css
+ *    반영: node scripts/sync-design.mjs
+ *
+ * axhub 콘솔과 같은 스택이에요.
+ *   Tailwind 4  +  HeroUI v3 (@heroui/react)  +  @jocoding-ax-partners/design-system
+ * 색·글자·모서리 토큰은 전부 design-system 패키지가 줘요. 여기서 값을 새로 만들지 않아요.
+ *
+ * 쓰는 법
+ *   - 컴포넌트는 @heroui/react 에서 가져와요. 모양은 design-system 이 콘솔처럼 바꿔 줘요.
+ *   - 색은 의미 클래스로: bg-surface bg-content bg-muted · text-default text-secondary
+ *     text-muted text-subtle · border-default · text-primary bg-primary-soft · text-danger …
+ *   - 글자는 t-page-title t-section-title t-card-title t-body t-small t-caption
+ *     또는 text-heading-01~05 text-body-01~03 text-caption-01~02.
+ *   - #hex · text-[15px] · text-gray-500 · bg-white 같은 생값은 쓰지 않아요 (check-design.sh).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* 순서가 중요해요: tailwind → design-system. design-system 이 @heroui/styles 를
+   스스로 맨 앞에 가져오므로 따로 import 하지 않아요 (두 번 들어가요). */
+@import "tailwindcss";
+@import "@jocoding-ax-partners/design-system/styles";
+
+/* @jocoding-ax-partners/react(셸·확인창 등)는 Tailwind 클래스로 그려져요.
+   Tailwind 4 는 node_modules 를 훑지 않아서 이 줄이 없으면 스타일 없이 나와요.
+   경로는 이 파일(app/) 기준이에요. */
+@source "../node_modules/@jocoding-ax-partners/react/dist";
+
+/* Pretendard — layout.tsx 가 CDN 으로 불러와요. */
+@theme {
+  --font-sans:
+    "Pretendard", -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI",
+    Roboto, sans-serif;
+}
+
+/* 다크 모드는 <html data-theme="dark">. layout.tsx 가 시스템 설정을 보고 붙여요. */
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  html[data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  /* 회색 캔버스(surface) 위에 흰 카드 — 콘솔과 같은 바탕이에요. */
+  body {
+    background: var(--bg-surface);
+    color: var(--fg-default);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* HeroUI Card / Toast 배경 — 콘솔 globals.css 와 같은 교정이에요 (@layer 밖이라 패키지 규칙을 이겨요).
+   design-system 이 .card--default · .toast 에 `bg-surface` 를 거는데, 그 유틸이 페이지 바탕
+   (--bg-surface) 으로 풀려서 카드가 바탕과 같은 색이 되고 토스트 글자가 안 보여요.
+   HeroUI 의 의미 변수 --surface 로 되돌려요 (라이트 흰색 / 다크 한 단계 밝게, 토스트는 반전). */
+.card--default,
+.toast {
+  background-color: var(--surface);
+}
+
+/* 콘솔과 같게 맞추는 두 가지 (apps/frontend globals.css 와 같은 값).
+   - 토스트가 모달·드로어 위에 떠야 해요.
+   - 탭 라벨은 axhub 가 16px 을 써요(@heroui/styles 기본 14px). @layer 밖이라 design-system 규칙을 이겨요. */
+.toast-region {
+  z-index: 2147483100;
+}
+
+.tabs__tab {
+  font-size: 16px;
+  line-height: 24px;
+}
