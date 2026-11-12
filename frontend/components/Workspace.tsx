@@ -111,7 +111,7 @@ export function Workspace() {
   const [notice, setNotice] = useState("");
   const [kind, setKind] = useState("resume");
   const [file, setFile] = useState<File | null>(null);
-  const tail = useRef<HTMLDivElement>(null);
+  const chatHistory = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const ready = useRef(false);
   const selected = session?.selected_posting;
@@ -170,9 +170,12 @@ export function Workspace() {
         .then(setRuns)
         .catch((e) => setError(e.message));
   }, [view]);
+  // 새 메시지가 생기면 채팅 박스만 맨 아래로 내린다.
+  // scrollIntoView는 페이지 전체까지 스크롤해서, 아래쪽 공고 카드를 눌렀을 때 화면이 채팅 끝으로 끌려 올라갔다.
   useEffect(() => {
-    tail.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [session?.messages.length, busy]);
+    const history = chatHistory.current;
+    if (history) history.scrollTo({ top: history.scrollHeight, behavior: "smooth" });
+  }, [session?.messages.length]);
   async function action(label: string, fn: () => Promise<void>) {
     setError("");
     setNotice("");
@@ -552,6 +555,7 @@ export function Workspace() {
                 </Card.Header>
                 <Card.Content className="flex flex-col gap-4">
                   <div
+                    ref={chatHistory}
                     className="chat-history flex flex-col gap-4"
                     aria-live="polite"
                   >
@@ -575,7 +579,6 @@ export function Workspace() {
                         <Report text={m.content} empty="" />
                       </div>
                     ))}
-                    <div ref={tail} />
                   </div>
                   <form
                     onSubmit={(e) => {

@@ -451,6 +451,15 @@
 - **검증**: `uv run pytest` 37 passed / 5 skipped, `uv run pylint backend mcp_server common` 10.00/10. 재순위를 검증하는 기존 테스트 4개는 `with_rerank` 픽스처로 스위치를 켜서 그대로 통과하고, 재순위 없는 경로의 새 테스트 1개(개수·순서·근거 줄 없음·재순위 LLM 미호출)를 추가했다. 실제 DB·LLM으로 "마감이 얼마 남지 않은 AI Engineer 공고 3개 추천해줘"를 실행해 3건이 마감 임박순으로, `reason` 없이 나오는 것을 확인했다.
 - **주의**: 재순위가 꺼져 있어 추천 근거(`reason`)가 없고, 요청 조건에 대한 LLM의 취사선택도 없다. 검색 결과 순서가 곧 추천 순서다(의미 검색 질의가 없으면 유사도는 `-`로 표시된다).
 
+### #45 에이전트 채팅에서 "공고 확인"을 누르면 화면이 위로 끌려 올라가던 문제 수정
+- **무엇을**: `frontend/components/Workspace.tsx`의 채팅 자동 스크롤을 고쳤다.
+  - 채팅 끝의 빈 `<div ref={tail}>`과 `scrollIntoView`를 없애고, `.chat-history` 박스에 ref를 달아 그 박스의 `scrollTo({ top: scrollHeight })`로 내린다(페이지 전체는 건드리지 않는다).
+  - 효과의 의존성에서 `busy`를 뺐다. 이제 새 메시지가 생길 때(`session?.messages.length`)만 실행된다.
+- **왜**: 화면에서 스크롤을 움직이는 코드는 이 한 곳뿐이었다. `scrollIntoView(block: "nearest")`는 채팅 박스뿐 아니라 페이지(window)도 스크롤하는데, 효과가 `busy`가 바뀔 때마다 실행됐다. "공고 확인"은 `busy`를 켰다 끄기 때문에, 채팅 카드 아래의 긴 "에이전트가 찾은 공고" 목록에서 카드를 누르면 위쪽 채팅 끝으로 페이지가 끌려 올라갔다. `busy`로 바뀌는 로딩 표시는 채팅 박스 안이 아니라 화면 맨 위 영역에 있어서 의존성에 넣을 이유도 없었다.
+- **변경**: `frontend/components/Workspace.tsx`
+- **검증**: `npx tsc --noEmit` 통과. `npm run lint`의 에러 2건(효과 안의 `setLoading(true)`, `<a href="/?view=documents">`)은 수정 전 `HEAD`에서도 같은 2건이 나와서 이번 변경과 무관하다. 코드 분석으로 원인을 찾았고 브라우저에서 직접 재현하거나 확인하지는 못했다.
+- **알아둘 점**: 새 메시지가 오면 채팅 박스 안만 맨 아래로 내려가고, 채팅 카드가 화면 밖에 있으면 페이지는 따라 내려가지 않는다.
+
 ---
 
 ## 미해결 / 다음 후보
