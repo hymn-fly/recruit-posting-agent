@@ -29,13 +29,13 @@ def make_graph(tools: dict):
         return {"answer": NO_PROFILE}
 
     async def decompose(state: ProfileGapState) -> ProfileGapState:
-        p = state["posting"]
+        posting = state["posting"]
         reqs = await decomposer.ainvoke(
             "아래 채용공고의 필수 역량(required)과 우대 역량(preferred)을 평가 가능한 개별 요구사항으로 나눠라. "
             "하는 일에서 드러나는 핵심 기술 요구도 required로 포함할 수 있다. 공고에 없는 요구는 만들지 않는다.\n\n"
-            f"제목: {p.get('title')}\n하는 일:\n{p.get('responsibilities') or '-'}\n"
-            f"필수 역량:\n{p.get('required_qualifications') or '-'}\n"
-            f"우대 역량:\n{p.get('preferred_qualifications') or '-'}\n최소 경력: {p.get('min_years')}")
+            f"제목: {posting.get('title')}\n하는 일:\n{posting.get('responsibilities') or '-'}\n"
+            f"필수 역량:\n{posting.get('required_qualifications') or '-'}\n"
+            f"우대 역량:\n{posting.get('preferred_qualifications') or '-'}\n최소 경력: {posting.get('min_years')}")
         return {"requirements": reqs.items[:12]}
 
     async def match(state: ProfileGapState) -> ProfileGapState:
@@ -55,7 +55,7 @@ def make_graph(tools: dict):
         return {"evidence": evidence, "assessments": res.items}
 
     async def synthesize(state: ProfileGapState) -> ProfileGapState:
-        p, reqs = state["posting"], state["requirements"]
+        posting, reqs = state["posting"], state["requirements"]
         table = "\n".join(
             f"- [{a.status}] ({reqs[a.index].type}) {reqs[a.index].text} — {a.comment}"
             + (f" / 근거: \"{a.evidence}\"" if a.evidence else "")
@@ -69,21 +69,21 @@ def make_graph(tools: dict):
             "## 면접에서 대비할 질문 3개.\n"
             "전체 2500자 이내로 간결하게. 판정 결과와 프로필에 없는 경력은 만들지 않는다."
             + (" 기업분석 리포트가 있으면 보완 방향을 회사의 사업 방향과 연결한다." if research else "") + "\n\n"
-            f"공고: [{p.get('company')}] {p.get('title')} (최소 경력 {p.get('min_years')})\n"
+            f"공고: [{posting.get('company')}] {posting.get('title')} (최소 경력 {posting.get('min_years')})\n"
             f"프로필 요약: {json.dumps(state['summary'], ensure_ascii=False)}\n\n판정 결과:\n{table}"
             + (f"\n\n기업분석 리포트:\n{research}" if research else ""))
         return {"answer": msg.text}
 
-    g = StateGraph(ProfileGapState)
-    g.add_node("load", load)
-    g.add_node("no_profile", no_profile)
-    g.add_node("decompose", decompose)
-    g.add_node("match", match)
-    g.add_node("synthesize", synthesize)
-    g.add_edge(START, "load")
-    g.add_conditional_edges("load", route_after_load, ["decompose", "no_profile"])
-    g.add_edge("no_profile", END)
-    g.add_edge("decompose", "match")
-    g.add_edge("match", "synthesize")
-    g.add_edge("synthesize", END)
-    return g.compile()
+    graph = StateGraph(ProfileGapState)
+    graph.add_node("load", load)
+    graph.add_node("no_profile", no_profile)
+    graph.add_node("decompose", decompose)
+    graph.add_node("match", match)
+    graph.add_node("synthesize", synthesize)
+    graph.add_edge(START, "load")
+    graph.add_conditional_edges("load", route_after_load, ["decompose", "no_profile"])
+    graph.add_edge("no_profile", END)
+    graph.add_edge("decompose", "match")
+    graph.add_edge("match", "synthesize")
+    graph.add_edge("synthesize", END)
+    return graph.compile()

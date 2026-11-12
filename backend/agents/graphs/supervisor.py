@@ -43,22 +43,27 @@ def _profile_brief(summary: dict) -> str:
 
 def make_graph(tools: dict, checkpointer=None):
     subset = {a: {n: tools[n] for n in names} for a, names in AGENT_TOOLS.items()}
+
     job_graph = job_search_graph.make_graph(subset["job_search"])
     research_graph = company_research_graph.make_graph(subset["company_research"])
     gap_graph = profile_gap_graph.make_graph(subset["profile_gap"])
+
     router = LLM(schema=Route, primary_timeout=15)
 
     async def supervisor(state: AppState) -> AppState:
         log.info("supervisor.start steps=%d candidates=%d selected=%s", state.get("steps", 0), len(state.get("candidates") or []), (state.get("selected_posting") or {}).get("id"))
         done = [o["agent"] for o in state.get("turn_outputs", [])]
+        
         if state.get("steps", 0) >= MAX_STEPS:
             return {"route": Route(next="FINISH", reason="이번 턴 최대 실행 수 도달").model_dump()}
+        
         cands = "\n".join(f"{i}. [{c['company']}] {c['title']} (id={c['id']})"
                           for i, c in enumerate(state.get("candidates") or [], 1)) or "(없음)"
         sel = state.get("selected_posting")
         sel_text = f"[{sel['company']}] {sel['title']} (id={sel['id']})" if sel else "없음"
         history = "\n".join(f"{'사용자' if isinstance(m, HumanMessage) else '시스템'}: {str(m.content)[:300]}"
                             for m in state["messages"][-HISTORY:])
+        
         route = await router.ainvoke(
             "너는 이직 준비 도우미의 Supervisor다. 사용자 마지막 요청을 처리할 다음 Agent를 고른다.\n"
             "- job_search: 채용공고 찾기/추천 (역할·자격요건 의미 검색)\n"
@@ -74,8 +79,10 @@ def make_graph(tools: dict, checkpointer=None):
             f"현재 추천 목록:\n{cands}\n"
             f"선택된 공고: {sel_text}\n\n"
             f"최근 대화:\n{history}")
+        
         if route.next in done:
             route = Route(next="FINISH", reason=f"{route.next}는 이번 턴에 이미 실행함")
+
         out: AppState = {"route": route}
         if route.next in NEEDS_POSTING:
             posting = None
@@ -92,6 +99,7 @@ def make_graph(tools: dict, checkpointer=None):
             elif not sel:
                 out["route"] = Route(next="FINISH", reason="분석할 공고가 선택되지 않음",
                                      reply="어떤 공고를 분석할까요? 먼저 공고를 검색하거나 번호/id로 알려주세요.")
+                
         log.info("route -> %s (%s)", out["route"].next, out["route"].reason)
         out["route"] = out["route"].model_dump()   # checkpointer 직렬화를 위해 dict로 저장
         return out
@@ -161,19 +169,19 @@ def make_graph(tools: dict, checkpointer=None):
     def route_next(state: AppState) -> str:
         return "finish" if state["route"]["next"] == "FINISH" else state["route"]["next"]
 
-    g = StateGraph(AppState)
-    g.add_node("supervisor", supervisor)
-    g.add_node("job_search", run_job_search)
-    g.add_node("company_research", run_company_research)
-    g.add_node("profile_gap", run_profile_gap)
-    g.add_node("finish", finish)
-    g.add_edge(START, "supervisor")
-    g.add_conditional_edges("supervisor", route_next,
+    graph = StateGraph(AppState)
+    graph.add_node("supervisor", supervisor)
+    graph.add_node("job_search", run_job_search)
+    graph.add_node("company_research", run_company_research)
+    graph.add_node("profile_gap", run_profile_gap)
+    graph.add_node("finish", finish)
+    graph.add_edge(START, "supervisor")
+    graph.add_conditional_edges("supervisor", route_next,
                             ["job_search", "company_research", "profile_gap", "finish"])
     for a in ("job_search", "company_research", "profile_gap"):
-        g.add_edge(a, "supervisor")
-    g.add_edge("finish", END)
-    return g.compile(checkpointer=checkpointer)
+        graph.add_edge(a, "supervisor")
+    graph.add_edge("finish", END)
+    return graph.compile(checkpointer=checkpointer)
 
 
 def turn_input(text: str) -> AppState:

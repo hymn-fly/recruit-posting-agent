@@ -80,13 +80,13 @@ def make_graph(tools: dict):
 
     async def plan(state: JobSearchState) -> JobSearchState:
         log.info("plan.start input_chars=%d", len(state["question"]))
-        p = await planner.ainvoke(
+        search_plan = await planner.ainvoke(
             PLAN_PROMPT
             + f"사용자 프로필 요약: {state.get('profile') or '(없음)'}\n"
             + f"요청: {state['question']}")
         log.info("plan.done: 검색 파라미터 %s",
-                 json.dumps(p.model_dump(exclude_none=True), ensure_ascii=False))
-        return {"plan": p}
+                 json.dumps(search_plan.model_dump(exclude_none=True), ensure_ascii=False))
+        return {"plan": search_plan}
 
     async def retrieve(state: JobSearchState) -> JobSearchState:
         # 값이 있는 파라미터만 넘긴다 (빈 리스트·빈 문자열도 제외)
@@ -135,22 +135,22 @@ def make_graph(tools: dict):
             f"요청: {state['question']}\n\n"
             f"후보(JSON):\n{json.dumps([_brief(r) for r in state['results']], ensure_ascii=False)}")
         by_id = {r["id"]: r for r in state["results"]}
-        candidates = [{**by_id[p.id], "reason": p.reason} for p in ranking.picks if p.id in by_id][:pick_count]
+        candidates = [{**by_id[pick.id], "reason": pick.reason} for pick in ranking.picks if pick.id in by_id][:pick_count]
         log.info("rerank_explain: 추천 %s", [c["id"] for c in candidates])
 
         if not candidates:
-            log.warning("rerank.empty returned_ids=%s valid_ids=%s", [p.id for p in ranking.picks], list(by_id))
+            log.warning("rerank.empty returned_ids=%s valid_ids=%s", [pick.id for pick in ranking.picks], list(by_id))
             return {"candidates": [], "answer": "검색은 됐지만 요청과 잘 맞는 공고를 찾지 못했습니다."}
         return {"candidates": candidates,
                 "answer": "추천 공고:\n" + format_candidates(candidates)
                           + "\n\n번호로 골라 기업분석이나 내 역량 비교를 요청할 수 있습니다."}
 
-    g = StateGraph(JobSearchState)
-    g.add_node("plan", plan)
-    g.add_node("retrieve", retrieve)
-    g.add_node("rerank_explain", rerank_explain)
-    g.add_edge(START, "plan")
-    g.add_edge("plan", "retrieve")
-    g.add_edge("retrieve", "rerank_explain")
-    g.add_edge("rerank_explain", END)
-    return g.compile()
+    graph = StateGraph(JobSearchState)
+    graph.add_node("plan", plan)
+    graph.add_node("retrieve", retrieve)
+    graph.add_node("rerank_explain", rerank_explain)
+    graph.add_edge(START, "plan")
+    graph.add_edge("plan", "retrieve")
+    graph.add_edge("retrieve", "rerank_explain")
+    graph.add_edge("rerank_explain", END)
+    return graph.compile()

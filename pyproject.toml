@@ -26,6 +26,7 @@ package = false
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.4",
 ]
 
 [tool.pytest.ini_options]
@@ -36,3 +37,14 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: 실제 Neon DB·LLM·Tavily를 호출하는 테스트 (--run-integration 일 때만 실행)",
 ]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["frontend"]   # 프론트엔드(node_modules 등)는 검사하지 않는다
+
+[tool.ruff.lint]
+select = ["N"]   # pep8-naming: 변수·함수는 snake_case, 클래스는 CapWords, 상수는 UPPER_CASE
+
+[tool.ruff.lint.per-file-ignores]
+# 테스트 이름은 한글 문장으로 쓴다. ruff는 한글을 "소문자"로 보지 않아 N802가 모든 한글 이름에 걸린다.
+"backend/tests/**" = ["N802"]

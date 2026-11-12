@@ -408,6 +408,13 @@
 - **검증**: `uv run pytest` 36 passed / 5 skipped. `PYTHONPATH=backend:. uv run uvicorn api.main:app`가 기동하고(`/docs` 200) MCP 서버 3개에서 도구 19개를 불러왔다. `open_tools()`로 `ROOT`가 저장소 루트를 가리키는지도 확인했다.
 - **주의**: FastAPI 실행 명령이 바뀌었다. `PYTHONPATH=backend:. uv run uvicorn api.main:app --host 127.0.0.1 --port 8000`(저장소 루트에서). 스크립트는 `uv run python backend/scripts/<이름>.py`. 확인 중 `embed_postings.py`를 실제로 한 번 실행해 미임베딩 공고 12건을 임베딩했다(`--help` 옵션이 없어 그대로 실행됨. 예약 작업이 하는 백필과 같은 동작).
 
+### #40 짧은 변수명 정리와 ruff 네이밍 검사(N) 도입
+- **무엇을**: 그래프 빌더 변수 `g`를 `graph`로, 지역 변수 `p`를 문맥에 맞게 `posting`(`profile_gap_graph.py`)·`search_plan`·`pick`(`job_search_graph.py`)으로 바꿨다. 4개 그래프 파일(`supervisor.py`, `job_search_graph.py`, `company_research_graph.py`, `profile_gap_graph.py`)에 적용했다. `supervisor.py`는 사용자가 먼저 `g`→`graph`와 논리 단계 사이 빈 줄을 적용해 둔 상태여서 그 변경을 그대로 함께 커밋한다. dev 의존성에 `ruff`를 추가하고 `pyproject.toml`에 `[tool.ruff]`(`select = ["N"]`, `frontend` 제외)를 설정했다.
+- **왜**: CLAUDE.md의 "변수명은 descriptive" 규칙을 어긴 곳이 있었고, 형식 규칙은 도구로 지키게 하려고.
+- **변경**: `backend/agents/graphs/*.py`(4개), `pyproject.toml`, `uv.lock`, `README.md`
+- **검증**: `uv run ruff check` All checks passed. `uv run pytest` 36 passed / 5 skipped. 이름 변경은 동작을 바꾸지 않고(`graph.compile()` 등 호출 구조 동일), 앱 코드에서 `N` 위반은 0건이었다.
+- **주의(한계)**: ruff `N`은 이름 **형식**만 검사하므로 `g` 같은 짧은 이름은 앞으로도 잡지 못한다(길이 규칙은 ruff에 없다). 또 `N802`는 한글이 든 함수 이름을 전부 위반으로 본다(한글에 대소문자가 없어서). 테스트 이름이 한글 문장이라 `backend/tests/**`에만 `N802`를 예외로 뒀다. 처음에 이를 대문자 문제로 오해해 테스트 이름을 소문자로 바꿨다가 효과가 없어 되돌렸다.
+
 ---
 
 ## 미해결 / 다음 후보
