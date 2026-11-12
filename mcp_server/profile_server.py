@@ -27,8 +27,8 @@ mcp = FastMCP("profile-db", lifespan=lifespan)
 @mcp.tool()
 async def get_profile_summary() -> dict:
     """구조화된 내 프로필 요약(스킬, 총 경력, 도메인, 주요 프로젝트 등). 적재된 자료가 없으면 빈 dict."""
-    p = await db.pool()
-    raw = await p.fetchval("SELECT summary FROM profile_summary WHERE id = 1")
+    connection_pool = await db.pool()
+    raw = await connection_pool.fetchval("SELECT summary FROM profile_summary WHERE id = 1")
     return json.loads(raw) if raw else {}
 
 
@@ -36,8 +36,8 @@ async def get_profile_summary() -> dict:
 async def search_profile(query: str, limit: int = 5) -> list[dict]:
     """내 이력서·경력기술서·포트폴리오에서 query와 관련된 원문 조각을 찾는다 (근거 인용용)."""
     limit = max(1, min(int(limit), 20))
-    p = await db.pool()
-    rows = await p.fetch(
+    connection_pool = await db.pool()
+    rows = await connection_pool.fetch(
         f"""SELECT d.filename, d.kind, c.chunk_index, c.text,
                    1 - (c.embedding <=> $1::vector) AS similarity
             FROM profile_chunks c JOIN profile_documents d ON d.id = c.document_id
@@ -49,8 +49,8 @@ async def search_profile(query: str, limit: int = 5) -> list[dict]:
 @mcp.tool()
 async def list_profile_documents() -> list[dict]:
     """적재된 프로필 문서 목록."""
-    p = await db.pool()
-    rows = await p.fetch(
+    connection_pool = await db.pool()
+    rows = await connection_pool.fetch(
         """SELECT d.filename, d.kind, length(d.raw_text) AS chars, d.updated_at::text AS updated_at,
                   (SELECT count(*) FROM profile_chunks c WHERE c.document_id = d.id) AS chunks
            FROM profile_documents d ORDER BY d.kind, d.filename""")

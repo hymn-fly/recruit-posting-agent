@@ -71,17 +71,17 @@ class LLM:
         if time.monotonic() >= _primary_down_until.get(self.primary_name, 0):
             try:
                 return await asyncio.wait_for(self._primary.ainvoke(prompt), self.primary_timeout)
-            except Exception as e:  # 타임아웃(10초 초과) 포함, 기본 모델 실패 시 전환
-                reason = f"{self.primary_timeout}초 초과" if isinstance(e, TimeoutError) else repr(e)[:120]
+            except Exception as error:  # 타임아웃(10초 초과) 포함, 기본 모델 실패 시 전환
+                reason = f"{self.primary_timeout}초 초과" if isinstance(error, TimeoutError) else repr(error)[:120]
                 log.warning("%s 실패(%s) -> %s로 전환, %d초간 건너뜀",
                             self.primary_name, reason, self.fallback_name, PRIMARY_COOLDOWN)
                 _primary_down_until[self.primary_name] = time.monotonic() + PRIMARY_COOLDOWN
-        for i in range(FALLBACK_RETRIES):
+        for attempt in range(FALLBACK_RETRIES):
             try:
-                log.info("llm.fallback model=%s schema=%s attempt=%d/%d", self.fallback_name, self.schema_name, i + 1, FALLBACK_RETRIES)
+                log.info("llm.fallback model=%s schema=%s attempt=%d/%d", self.fallback_name, self.schema_name, attempt + 1, FALLBACK_RETRIES)
                 return await self._fallback.ainvoke(prompt)
             except Exception:
-                log.exception("llm.fallback_failed model=%s attempt=%d", self.fallback_name, i + 1)
-                if i == FALLBACK_RETRIES - 1:
+                log.exception("llm.fallback_failed model=%s attempt=%d", self.fallback_name, attempt + 1)
+                if attempt == FALLBACK_RETRIES - 1:
                     raise
-                await asyncio.sleep(2 ** i)
+                await asyncio.sleep(2 ** attempt)

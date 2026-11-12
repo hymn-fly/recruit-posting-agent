@@ -41,10 +41,10 @@ PLAN_PROMPT = (
 )
 
 
-def _brief(r: dict) -> dict:
+def _brief(record: dict) -> dict:
     keys = ("id", "company", "industry", "title", "location", "min_years", "category", "deadline",
             "responsibilities", "required_qualifications", "preferred_qualifications")
-    return {k: (r[k][:BRIEF_LEN] if isinstance(r.get(k), str) else r.get(k)) for k in keys}
+    return {k: (record[k][:BRIEF_LEN] if isinstance(record.get(k), str) else record.get(k)) for k in keys}
 
 
 def format_similarity_for_display(value) -> str:
@@ -64,13 +64,13 @@ def format_search_rows_for_log(rows: list[dict]) -> str:
 
 def format_candidates(candidates: list[dict]) -> str:
     lines = []
-    for i, c in enumerate(candidates, 1):
-        meta = " · ".join(str(v) for v in (c.get("category"), c.get("location"),
-                                           f"경력 {c['min_years']}년+" if c.get("min_years") else None,
-                                           f"마감 {c['deadline']}" if c.get("deadline") else None) if v)
-        lines.append(f"{i}. [{c['company']}] {c['title']} "
-                     f"(id={c['id']}, 유사도 {format_similarity_for_display(c.get('similarity'))})\n"
-                     f"   {meta}\n   → {c['reason']}" + (f"\n   {c['url']}" if c.get("url") else ""))
+    for index, candidate in enumerate(candidates, 1):
+        meta = " · ".join(str(v) for v in (candidate.get("category"), candidate.get("location"),
+                                           f"경력 {candidate['min_years']}년+" if candidate.get("min_years") else None,
+                                           f"마감 {candidate['deadline']}" if candidate.get("deadline") else None) if v)
+        lines.append(f"{index}. [{candidate['company']}] {candidate['title']} "
+                     f"(id={candidate['id']}, 유사도 {format_similarity_for_display(candidate.get('similarity'))})\n"
+                     f"   {meta}\n   → {candidate['reason']}" + (f"\n   {candidate['url']}" if candidate.get("url") else ""))
     return "\n".join(lines)
 
 

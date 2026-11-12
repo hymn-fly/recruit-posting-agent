@@ -114,10 +114,10 @@ def make_graph(tools: dict, checkpointer=None):
         try:
             log.info("job_search.start use_profile=%s", state["route"]["use_profile"])
             res = await job_graph.ainvoke({"question": _last_user(state), "profile": profile})
-        except Exception as e:
+        except Exception as error:
             log.exception("job_search 실패")
             return {"steps": state.get("steps", 0) + 1,
-                    "turn_outputs": _output(state, "job_search", f"⚠️ 채용공고 조회 실패: {e!r}"[:300])}
+                    "turn_outputs": _output(state, "job_search", f"⚠️ 채용공고 조회 실패: {error!r}"[:300])}
         log.info("job_search.done candidates=%d answer_chars=%d", len(res.get("candidates") or []), len(res.get("answer", "")))
         upd: AppState = {"steps": state.get("steps", 0) + 1,
                          "turn_outputs": _output(state, "job_search", res["answer"])}
@@ -133,10 +133,10 @@ def make_graph(tools: dict, checkpointer=None):
                                             "⚠️ 기업분석에는 웹 검색 키가 필요합니다. `.env`에 TAVILY_API_KEY를 넣어주세요.")}
         try:
             res = await research_graph.ainvoke({"posting": posting})
-        except Exception as e:
+        except Exception as error:
             log.exception("company_research 실패")
             return {"steps": state.get("steps", 0) + 1,
-                    "turn_outputs": _output(state, "company_research", f"⚠️ 기업분석 실패: {e!r}"[:300])}
+                    "turn_outputs": _output(state, "company_research", f"⚠️ 기업분석 실패: {error!r}"[:300])}
         return {"steps": state.get("steps", 0) + 1, "research_report": res["report"],
                 "research_posting_id": posting["id"],
                 "turn_outputs": _output(state, "company_research", res["answer"])}
@@ -146,10 +146,10 @@ def make_graph(tools: dict, checkpointer=None):
         research = state.get("research_report") if state.get("research_posting_id") == posting["id"] else None
         try:
             res = await gap_graph.ainvoke({"posting": posting, "research_report": research})
-        except Exception as e:
+        except Exception as error:
             log.exception("profile_gap 실패")
             return {"steps": state.get("steps", 0) + 1,
-                    "turn_outputs": _output(state, "profile_gap", f"⚠️ 내 프로필 분석 실패: {e!r}"[:300])}
+                    "turn_outputs": _output(state, "profile_gap", f"⚠️ 내 프로필 분석 실패: {error!r}"[:300])}
         return {"steps": state.get("steps", 0) + 1, "gap_report": res["answer"],
                 "gap_posting_id": posting["id"],
                 "turn_outputs": _output(state, "profile_gap", res["answer"])}
@@ -178,8 +178,8 @@ def make_graph(tools: dict, checkpointer=None):
     graph.add_edge(START, "supervisor")
     graph.add_conditional_edges("supervisor", route_next,
                             ["job_search", "company_research", "profile_gap", "finish"])
-    for a in ("job_search", "company_research", "profile_gap"):
-        graph.add_edge(a, "supervisor")
+    for agent_name in ("job_search", "company_research", "profile_gap"):
+        graph.add_edge(agent_name, "supervisor")
     graph.add_edge("finish", END)
     return graph.compile(checkpointer=checkpointer)
 

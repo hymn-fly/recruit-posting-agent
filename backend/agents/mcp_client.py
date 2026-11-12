@@ -61,10 +61,10 @@ def parse_mcp_tool_result(raw) -> list[dict]:
         for item in raw:
             if isinstance(item, dict) and item.get("type") == "text":
                 try:
-                    v = json.loads(item["text"])
+                    parsed = json.loads(item["text"])
                 except json.JSONDecodeError:
                     continue
-                out.extend(v if isinstance(v, list) else [v])
+                out.extend(parsed if isinstance(parsed, list) else [parsed])
             elif isinstance(item, dict):
                 out.append(item)
     return out

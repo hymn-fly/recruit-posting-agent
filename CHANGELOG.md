@@ -421,6 +421,15 @@
 - **변경**: `pyproject.toml`, `uv.lock`, `README.md`
 - **검증**: `uv run pytest` 36 passed / 5 skipped. `pyproject.toml`·`README.md`에 ruff 언급이 남지 않았는지 grep으로 확인.
 
+### #42 pylint로 짧은 변수명 검사(invalid-name, 3글자 이상) 도입과 앱 코드 이름 정리
+- **무엇을**: `pylint`를 dev 의존성에 추가하고 `pyproject.toml`에 `invalid-name`만 켰다. `variable-rgx`·`argument-rgx`를 소문자 snake_case 3글자 이상(한글 허용)으로 제한했고, `good-names`에 `_`·`id`, `const-rgx`에 밑줄로 시작하는 소문자(모듈 전용 싱글턴)를 허용했다. 컴프리헨션 변수(`inlinevar-rgx`)는 기본값을 그대로 쓰므로 짧아도 된다. `frontend`와 `backend/tests`는 검사에서 뺐다.
+  - 앱 코드의 위반 58건을 고쳤다: DB 풀 `p`→`connection_pool`(약 30곳), `except ... as e`→`error`, 행 `r`→`row`/`record`/`posting_row`, 해시 `h`→`content_hash`, 루프 `i`→`index`/`attempt`, `a`→`agent_name`, `it`→`item`/`embedding_iter`, `s`→`profile_summary_model`, `ap`→`arg_parser`, `f`→`file_path`, `v`→`parsed` 등.
+  - `backend/api/main.py`의 `/jobs` 쿼리 파라미터 `q`는 URL을 유지하려고 `search_text: str = Query("", alias="q")`로 바꿨다(프론트가 `?q=`로 호출).
+- **왜**: CLAUDE.md의 "변수명은 descriptive" 규칙을 도구로 검사하려고. ruff `N`은 길이를 검사하지 못해(#41에서 제거) 길이 정규식을 지정할 수 있는 pylint를 썼다.
+- **변경**: `pyproject.toml`, `uv.lock`, `README.md`, `backend/agents/{llm.py,mcp_client.py}`, `backend/agents/graphs/*.py`(4개), `backend/api/main.py`, `backend/scripts/ingest_profile.py`, `mcp_server/{collect_server.py,query_server.py,profile_server.py}`
+- **검증**: `uv run pylint backend mcp_server common` 10.00/10. 이름 변경이 일부만 반영된 곳이 없는지 `undefined-variable`·`used-before-assignment`·`unused-variable`로 검사해 새 경고가 없었다. `uv run pytest` 36 passed / 5 skipped. 서버를 실제로 띄워 `/jobs`, `/jobs?q=`(없는 검색어는 `total: 0`), `/collection`, `/documents`가 200이고, MCP 도구 `get_job_posting`·`list_companies`·`list_known_urls`·`get_profile_summary`·`list_profile_documents`·`embed_pending_postings`가 정상 호출되는지 확인했다.
+- **주의**: `id`는 MCP 도구 파라미터라 예외로 뒀다. 이름 변경은 범위를 제한한 토큰 단위 치환(속성 접근·키워드 인자 제외, 새 이름 충돌 시 중단)으로 했다. `embed_pending_postings`는 쓰기 도구인데 검증용으로 한 번 호출했고, 대기 중인 공고가 있었다면 임베딩됐을 수 있다(직전까지 `remaining: 0`이었다). `backend/tests`는 아직 검사하지 않는다(테스트 함수 이름에 영문 대문자가 든 것 등 42건이 남아 있다).
+
 ---
 
 ## 미해결 / 다음 후보

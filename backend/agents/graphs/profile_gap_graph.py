@@ -44,9 +44,9 @@ def make_graph(tools: dict):
             for r in state["requirements"]))
         evidence = [parse_mcp_tool_result(r) for r in results]
         blocks = []
-        for i, (req, ev) in enumerate(zip(state["requirements"], evidence)):
-            chunks = "\n".join(f"  - ({e['filename']}) {e['text']}" for e in ev)
-            blocks.append(f"[{i}] ({req.type}) {req.text}\n 관련 프로필 원문:\n{chunks}")
+        for index, (req, requirement_evidence) in enumerate(zip(state["requirements"], evidence)):
+            chunks = "\n".join(f"  - ({e['filename']}) {e['text']}" for e in requirement_evidence)
+            blocks.append(f"[{index}] ({req.type}) {req.text}\n 관련 프로필 원문:\n{chunks}")
         res = await judge.ainvoke(
             "각 요구사항을 지원자가 충족하는지 판정하라. 근거는 아래 '관련 프로필 원문'과 프로필 요약에 "
             "실제로 적힌 내용만 쓴다. 원문에 없으면 '미충족'(또는 간접 근거만 있으면 '부분')으로 판정하고, "

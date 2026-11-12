@@ -26,8 +26,8 @@ from mcp_server.embeddings import embed_query, to_pg  # noqa: E402
 mcp = FastMCP("job-query", lifespan=lifespan)
 
 
-def _row(r) -> dict:
-    return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in dict(r).items()}
+def _row(record) -> dict:
+    return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in dict(record).items()}
 
 
 # 의미 검색 질의 인자 → (비교할 컬럼별 임베딩, 결과에 붙일 유사도 키)
@@ -149,8 +149,8 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
     else:
         order_and_limit = f"ORDER BY j.last_seen_at DESC LIMIT {limit}"
     log.info("search.sql.start filters=%s semantic_fields=%s", conditions, asked_fields)
-    p = await pool()
-    rows = [_row(r) for r in await p.fetch(
+    connection_pool = await pool()
+    rows = [_row(r) for r in await connection_pool.fetch(
         f"SELECT {select_columns} FROM job_postings j JOIN companies c ON c.id = j.company_id "
         f"{where} {order_and_limit}", *args)]
     log.info("search.sql.done rows=%d elapsed=%.2fs", len(rows), time.perf_counter() - started)
@@ -179,16 +179,16 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
 @mcp.tool()
 async def get_job_posting(id: int) -> dict:
     """공고 1건 전체(하는 일/필수/우대 역량)와 회사·산업 정보."""
-    p = await pool()
-    r = await p.fetchrow(
+    connection_pool = await pool()
+    row = await connection_pool.fetchrow(
         """SELECT j.id, c.name AS company, c.industry, j.title, j.url, j.location,
                   j.employment_type, j.min_years, j.category, j.responsibilities,
                   j.required_qualifications, j.preferred_qualifications, j.posted_at,
                   j.deadline, j.is_active
            FROM job_postings j JOIN companies c ON c.id = j.company_id WHERE j.id = $1""", id)
-    if r is None:
+    if row is None:
         raise ValueError(f"공고 없음: id={id}")
-    return _row(r)
+    return _row(row)
 
 
 @mcp.tool()
@@ -197,10 +197,10 @@ async def get_cached_research(company_name: str, target_company: str, max_age_da
 
     target_company: 실제 채용 계열사명 (그룹 포털이 아니면 company_name과 같아도 됨).
     """
-    p = await pool()
-    async with p.acquire() as conn:
+    connection_pool = await pool()
+    async with connection_pool.acquire() as conn:
         cid = await get_company_id_by_name(conn, company_name)
-        r = await conn.fetchrow(
+        row = await conn.fetchrow(
             """SELECT id, posting_id, target_company, topics::text AS topics, report_md,
                       created_at::text AS created_at
                FROM company_research
@@ -208,17 +208,17 @@ async def get_cached_research(company_name: str, target_company: str, max_age_da
                  AND created_at > now() - make_interval(days => $3)
                ORDER BY created_at DESC LIMIT 1""",
             cid, target_company, int(max_age_days))
-    if r is None:
+    if row is None:
         return {}
-    return {**dict(r), "topics": json.loads(r["topics"])}
+    return {**dict(row), "topics": json.loads(row["topics"])}
 
 
 @mcp.tool()
 async def save_research(company_name: str, target_company: str, topics: list[dict], report_md: str,
                         posting_id: Optional[int] = None) -> dict:
     """리서치 결과 저장. topics: [{"topic", "summary", "sources": [{"title", "url"}]}]."""
-    p = await pool()
-    async with p.acquire() as conn:
+    connection_pool = await pool()
+    async with connection_pool.acquire() as conn:
         cid = await get_company_id_by_name(conn, company_name)
         rid = await conn.fetchval(
             """INSERT INTO company_research (company_id, target_company, posting_id, topics, report_md)

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
@@ -110,6 +110,7 @@ async def chat(sid: str, body: Message):
     cfg = config(sid)
     started = time.perf_counter()
     log.info("chat.queued session=%s input_chars=%d", sid, len(body.text))
+    
     async with sessions[sid]:
         log.info("chat.start session=%s lock_wait=%.2fs", sid, time.perf_counter() - started)
         try:
@@ -131,8 +132,8 @@ async def chat(sid: str, body: Message):
 async def select_posting(sid: str, posting_id: int):
     cfg = config(sid)
     async with sessions[sid]:
-        p = await db.pool()
-        row = await p.fetchrow("SELECT j.id,j.title,j.url,j.location,j.deadline,j.min_years,j.responsibilities,j.required_qualifications,j.preferred_qualifications,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE j.id=$1", posting_id)
+        connection_pool = await db.pool()
+        row = await connection_pool.fetchrow("SELECT j.id,j.title,j.url,j.location,j.deadline,j.min_years,j.responsibilities,j.required_qualifications,j.preferred_qualifications,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE j.id=$1", posting_id)
         if not row:
             raise HTTPException(404, "공고를 찾지 못했습니다.")
         state = (await app.state.graph.aget_state(cfg)).values
@@ -140,7 +141,7 @@ async def select_posting(sid: str, posting_id: int):
         update = {"selected_posting": jsonable_encoder(dict(row))}
         if old.get("id") != posting_id:
             update.update(research_report="", research_posting_id=None, gap_report="")
-            cached = await p.fetchval("SELECT report_md FROM company_research WHERE posting_id=$1 ORDER BY created_at DESC LIMIT 1", posting_id)
+            cached = await connection_pool.fetchval("SELECT report_md FROM company_research WHERE posting_id=$1 ORDER BY created_at DESC LIMIT 1", posting_id)
             if cached:
                 update.update(research_report=cached, research_posting_id=posting_id)
         await app.state.graph.aupdate_state(cfg, update)
@@ -148,25 +149,25 @@ async def select_posting(sid: str, posting_id: int):
 
 
 @app.get("/jobs")
-async def jobs(q: str = "", active: bool = True, offset: int = 0):
-    p = await db.pool()
+async def jobs(search_text: str = Query("", alias="q"), active: bool = True, offset: int = 0):   # URL은 ?q= 그대로
+    connection_pool = await db.pool()
     condition = "($1='' OR j.title ILIKE '%'||$1||'%' OR c.name ILIKE '%'||$1||'%') AND (NOT $2 OR (j.is_active AND (j.deadline IS NULL OR j.deadline >= (now() AT TIME ZONE 'Asia/Seoul')::date)))"
-    total = await p.fetchval(f"SELECT count(*) FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE {condition}", q, active)
-    rows = await p.fetch(f"SELECT j.id,j.title,j.location,j.category,j.deadline,j.min_years,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE {condition} ORDER BY j.first_seen_at DESC,j.id DESC LIMIT 30 OFFSET $3", q, active, max(offset, 0))
+    total = await connection_pool.fetchval(f"SELECT count(*) FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE {condition}", search_text, active)
+    rows = await connection_pool.fetch(f"SELECT j.id,j.title,j.location,j.category,j.deadline,j.min_years,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE {condition} ORDER BY j.first_seen_at DESC,j.id DESC LIMIT 30 OFFSET $3", search_text, active, max(offset, 0))
     return jsonable_encoder({"items": [dict(r) for r in rows], "total": total})
 
 
 @app.get("/collection")
 async def collection():
-    p = await db.pool()
-    rows = await p.fetch("SELECT source,status,detail,run_at FROM scrape_runs ORDER BY run_at DESC LIMIT 50")
+    connection_pool = await db.pool()
+    rows = await connection_pool.fetch("SELECT source,status,detail,run_at FROM scrape_runs ORDER BY run_at DESC LIMIT 50")
     return jsonable_encoder([dict(r) for r in rows])
 
 
 @app.get("/documents")
 async def documents():
-    p = await db.pool()
-    rows = await p.fetch("SELECT id,kind,filename,updated_at FROM profile_documents ORDER BY updated_at DESC")
+    connection_pool = await db.pool()
+    rows = await connection_pool.fetch("SELECT id,kind,filename,updated_at FROM profile_documents ORDER BY updated_at DESC")
     return jsonable_encoder([dict(r) for r in rows])
 
 

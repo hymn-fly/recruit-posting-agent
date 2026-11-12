@@ -31,10 +31,10 @@ TOPIC_TITLES = {
 
 
 
-def _posting_brief(p: dict) -> str:
-    return (f"회사: {p.get('company')} (산업: {p.get('industry') or '미상'})\n"
-            f"공고: {p.get('title')} / 직군: {p.get('category')}\n"
-            f"하는 일: {(p.get('responsibilities') or '-')[:800]}")
+def _posting_brief(posting: dict) -> str:
+    return (f"회사: {posting.get('company')} (산업: {posting.get('industry') or '미상'})\n"
+            f"공고: {posting.get('title')} / 직군: {posting.get('category')}\n"
+            f"하는 일: {(posting.get('responsibilities') or '-')[:800]}")
 
 
 def make_graph(tools: dict):
@@ -126,18 +126,18 @@ def make_graph(tools: dict):
                             "sources": [{"title": s["title"], "url": s["url"]} for s in sources]}]}
 
     async def synthesize(state: ResearchState) -> ResearchState:
-        p, plan = state["posting"], state["plan"]
+        posting, plan = state["posting"], state["plan"]
         order = {t: i for i, t in enumerate(TOPIC_TITLES)}
         topics = sorted(state["cached"] + state.get("topics", []), key=lambda t: order[t["topic"]])
         # 토픽별 로컬 [n]을 전체 출처 번호로 바꾼다
         all_sources, blocks = [], []
-        for t in topics:
+        for topic_name in topics:
             base = len(all_sources)
-            all_sources.extend(t["sources"])
+            all_sources.extend(topic_name["sources"])
             summary = re.sub(r"\[(\d+)\]",
-                             lambda m: f"[{base + int(m.group(1))}]" if 0 < int(m.group(1)) <= len(t["sources"])
-                             else "", t["summary"])
-            blocks.append(f"### {TOPIC_TITLES[t['topic']]}\n{summary}")
+                             lambda m: f"[{base + int(m.group(1))}]" if 0 < int(m.group(1)) <= len(topic_name["sources"])
+                             else "", topic_name["summary"])
+            blocks.append(f"### {TOPIC_TITLES[topic_name['topic']]}\n{summary}")
 
         msg = await writer.ainvoke(
             "너는 지원자를 돕는 기업분석 리서처다. 아래 토픽별 리서치 요약만 근거로 한국어 마크다운 리포트를 써라.\n"
@@ -146,8 +146,8 @@ def make_graph(tools: dict):
             "구체적 아이디어 3~5개, 면접·자소서에서 쓸 수 있게) / ## 한 줄 요약.\n"
             "모든 사실 문장에는 요약에 있는 출처 번호 [n]을 그대로 유지한다. 근거가 없으면 '확인 불가'라고 쓴다. "
             "기여 아이디어는 근거를 바탕으로 한 제안임을 분명히 한다. 3500자 이내.\n\n"
-            f"분석 대상 회사: {plan.target_company} (채용 포털: {p['company']}) / 산업: {plan.industry}\n"
-            f"{_posting_brief(p)}\n필수 역량: {(p.get('required_qualifications') or '-')[:600]}\n\n"
+            f"분석 대상 회사: {plan.target_company} (채용 포털: {posting['company']}) / 산업: {plan.industry}\n"
+            f"{_posting_brief(posting)}\n필수 역량: {(posting.get('required_qualifications') or '-')[:600]}\n\n"
             + "\n\n".join(blocks))
         cited = {int(n) for n in re.findall(r"\[(\d+)\]", msg.text)}   # 본문에 인용된 출처만 목록에 남긴다
         refs = "\n".join(f"[{i}] {s['title']} — {s['url']}"
@@ -155,8 +155,8 @@ def make_graph(tools: dict):
         report = f"# {plan.target_company} 기업분석\n\n{msg.text}\n\n## 출처\n{refs}"
 
         saved = get_first_mcp_result(await tools["save_research"].ainvoke(
-            {"company_name": p["company"], "target_company": plan.target_company,
-             "posting_id": p.get("id"), "topics": topics, "report_md": report}))
+            {"company_name": posting["company"], "target_company": plan.target_company,
+             "posting_id": posting.get("id"), "topics": topics, "report_md": report}))
         log.info("synthesize: 토픽 %d개(캐시 %d) / 출처 %d개 중 인용 %d개 / 리포트 %d자 → research id=%s 저장",
                  len(topics), len(state["cached"]), len(all_sources), len(cited & set(range(1, len(all_sources) + 1))),
                  len(report), saved.get("id"))

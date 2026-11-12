@@ -74,6 +74,14 @@ uv run pytest --run-integration -k job_search -s          # Agent 하나만: job
 ```
 - 프로필 자료가 없으면 `profile_gap` 통합 테스트는 건너뛴다.
 
+## 이름 규칙 검사
+```bash
+uv run pylint backend mcp_server common   # invalid-name만 검사한다
+```
+- 변수·인자는 소문자 snake_case **3글자 이상**(`variable-rgx`, `argument-rgx`). 한글은 허용한다. 컴프리헨션 변수(`for r in rows`)는 짧아도 된다.
+- 예외: `_`, `id`(MCP 도구 파라미터 이름이라 바꿀 수 없다). 모듈 전용 싱글턴(`_pool` 등)은 밑줄로 시작하는 소문자를 허용한다.
+- `backend/tests`는 아직 검사하지 않는다. 설정은 `pyproject.toml`의 `[tool.pylint]`.
+
 ## 전체 동작 흐름
 
 ### 1. 구성도

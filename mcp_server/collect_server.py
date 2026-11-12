@@ -55,8 +55,8 @@ async def fetch_urls_seen_on_site(table_name: str, site_url: str, candidate_urls
     assert table_name in ("job_postings", "filtered_postings")   # 내부에서만 부르는 고정 값(SQL 식별자)
     site_host = normalize_site_host(site_url)
     active_condition = "AND is_active" if only_active else ""
-    p = await pool()
-    rows = await p.fetch(
+    connection_pool = await pool()
+    rows = await connection_pool.fetch(
         f"""SELECT url FROM (
                 SELECT url, {POSTING_URL_HOST_SQL} AS host
                 FROM {table_name}
@@ -94,8 +94,8 @@ async def upsert_company(name: str, portal_url: str, access_method: str = "unkno
     Returns:
       {"id": 회사 id, "name": 회사명}
     """
-    p = await pool()
-    row = await p.fetchrow(
+    connection_pool = await pool()
+    row = await connection_pool.fetchrow(
         """INSERT INTO companies (name, portal_url, access_method, notes, industry)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (name) DO UPDATE
@@ -121,8 +121,8 @@ async def upsert_job_posting(company_name: str, title: str, url: Optional[str] =
     """공고 1건을 저장한다. 이미 있으면 last_seen_at 등을 갱신한다. 날짜는 YYYY-MM-DD."""
     if category is not None and category not in ALLOWED_CATEGORIES:
         raise ValueError(f"category는 {ALLOWED_CATEGORIES} 중 하나여야 함: {category!r}")
-    p = await pool()
-    async with p.acquire() as conn:
+    connection_pool = await pool()
+    async with connection_pool.acquire() as conn:
         cid = await get_company_id_by_name(conn, company_name)
         row = await conn.fetchrow(
             """INSERT INTO job_postings
@@ -179,8 +179,8 @@ async def touch_postings(site_url: str, urls: list[str]) -> dict:
         그래서 list_known_urls가 돌려준 URL을 회사별로 나눌 필요 없이 한 번에 넘기면 된다.
     """
     site_host = normalize_site_host(site_url)
-    p = await pool()
-    res = await p.execute(
+    connection_pool = await pool()
+    res = await connection_pool.execute(
         f"""UPDATE job_postings SET last_seen_at = now(), is_active = true
             WHERE id IN (
                 SELECT id FROM (SELECT id, {POSTING_URL_HOST_SQL} AS host
@@ -200,13 +200,13 @@ async def record_filtered_postings(company_name: str, items: list[dict]) -> dict
     이미 기록된 공고는 stage/reason/last_seen_at만 갱신하며, 사람이 매긴 is_actually_ai는 유지한다.
     """
     rows = []
-    for it in items:
-        title, stage = it.get("title"), it.get("stage")
+    for item in items:
+        title, stage = item.get("title"), item.get("stage")
         if not title or stage not in ("list", "detail"):
-            raise ValueError(f"title과 stage(list|detail)는 필수: {it!r}")
-        rows.append((title, it.get("url"), it.get("location"), stage, it.get("reason")))
-    p = await pool()
-    async with p.acquire() as conn:
+            raise ValueError(f"title과 stage(list|detail)는 필수: {item!r}")
+        rows.append((title, item.get("url"), item.get("location"), stage, item.get("reason")))
+    connection_pool = await pool()
+    async with connection_pool.acquire() as conn:
         cid = await get_company_id_by_name(conn, company_name)
         async with conn.transaction():
             await conn.executemany(
@@ -255,8 +255,8 @@ async def record_scrape_run(source: str, status: str, detail: Optional[str] = No
     if not normalized_source:
         raise ValueError("source는 비어 있을 수 없음 (portal_url 또는 사이트 링크)")
 
-    p = await pool()
-    run_id = await p.fetchval(
+    connection_pool = await pool()
+    run_id = await connection_pool.fetchval(
         "INSERT INTO scrape_runs (source, status, detail) VALUES ($1,$2,$3) RETURNING id",
         normalized_source, status, detail)
     return {"id": run_id}
@@ -272,8 +272,8 @@ async def list_latest_scrape_status_by_source() -> list[dict]:
     Returns:
       [{"source", "status", "detail", "run_at"(ISO 8601)}], 최근 실행 순.
     """
-    p = await pool()
-    rows = await p.fetch(
+    connection_pool = await pool()
+    rows = await connection_pool.fetch(
         """SELECT DISTINCT ON (source) source, status, detail, run_at
            FROM scrape_runs
            ORDER BY source, run_at DESC""")
@@ -281,10 +281,10 @@ async def list_latest_scrape_status_by_source() -> list[dict]:
     return sorted(latest_runs, key=lambda run: run["run_at"], reverse=True)
 
 
-def _posting_text(r) -> str:
+def _posting_text(posting_row) -> str:
     """임베딩 원문: 역할·자격요건 중심으로 합친다."""
-    parts = [r["title"], r["category"], r["responsibilities"],
-             r["required_qualifications"], r["preferred_qualifications"]]
+    parts = [posting_row["title"], posting_row["category"], posting_row["responsibilities"],
+             posting_row["required_qualifications"], posting_row["preferred_qualifications"]]
     return "\n".join(p for p in parts if p)
 
 
@@ -293,38 +293,38 @@ EMBED_VERSION = f"v4-fields-raw-{MODEL}-{DIM}"
 FIELD_COLUMNS = ("responsibilities", "required_qualifications", "preferred_qualifications")
 
 
-def _field_texts(r) -> list[Optional[str]]:
+def _field_texts(posting_row) -> list[Optional[str]]:
     """컬럼별 임베딩 원문(본문만). 값이 없으면 None.
 
     제목을 앞에 붙이면 세 컬럼 벡터가 제목 쪽으로 쏠려 컬럼 간 유사도 차이가 1/2~1/3로 줄었다(CHANGELOG #20).
     직무명(제목)은 semantic_search_jobs의 title_keywords 키워드 필터로 다룬다.
     """
-    return [r[col] or None for col in FIELD_COLUMNS]
+    return [posting_row[col] or None for col in FIELD_COLUMNS]
 
 
 async def embed_pending(limit: int = 100) -> dict:
     """embedding이 없거나 원문이 바뀐 활성 공고를 배치 임베딩한다."""
     limit = max(1, min(int(limit), 500))
-    p = await pool()
-    rows = await p.fetch(
+    connection_pool = await pool()
+    rows = await connection_pool.fetch(
         """SELECT id, title, category, responsibilities, required_qualifications,
                   preferred_qualifications, embedding_hash
            FROM job_postings WHERE is_active ORDER BY id""")
     todo = []
-    for r in rows:
-        texts = [_posting_text(r)] + _field_texts(r)   # 통합 1개 + 컬럼별 3개(없으면 None)
-        h = text_hash(EMBED_VERSION + "\x00".join(t or "" for t in texts))
-        if h != r["embedding_hash"]:
-            todo.append((r["id"], texts, h))
+    for row in rows:
+        texts = [_posting_text(row)] + _field_texts(row)   # 통합 1개 + 컬럼별 3개(없으면 None)
+        content_hash = text_hash(EMBED_VERSION + "\x00".join(t or "" for t in texts))
+        if content_hash != row["embedding_hash"]:
+            todo.append((row["id"], texts, content_hash))
     remaining = max(0, len(todo) - limit)
     todo = todo[:limit]
     flat = [t for _, texts, _ in todo for t in texts if t]
-    it = iter(await embed_documents(flat))
+    embedding_iter = iter(await embed_documents(flat))
     params = []
-    for pid, texts, h in todo:
-        vecs = [to_pg(next(it)) if t else None for t in texts]
-        params.append((pid, *vecs, h))
-    async with p.acquire() as conn, conn.transaction():
+    for pid, texts, content_hash in todo:
+        vecs = [to_pg(next(embedding_iter)) if t else None for t in texts]
+        params.append((pid, *vecs, content_hash))
+    async with connection_pool.acquire() as conn, conn.transaction():
         await conn.executemany(
             """UPDATE job_postings
                SET embedding = $2::vector, embedding_responsibilities = $3::vector,
@@ -362,8 +362,8 @@ async def delete_expired_and_urlless_postings() -> dict:
       {"deleted": 삭제 건수, "expired": 만료로 지운 건수, "url_missing": URL 없어서 지운 건수,
        "postings": [{"id", "company", "title", "url", "deadline", "reason"}]}
     """
-    p = await pool()
-    async with p.acquire() as conn, conn.transaction():
+    connection_pool = await pool()
+    async with connection_pool.acquire() as conn, conn.transaction():
         deleted_postings = await delete_expired_and_urlless_postings_in(conn)
     return {"deleted": len(deleted_postings),
             "expired": sum(1 for posting in deleted_postings if posting["reason"] == "expired"),
@@ -392,8 +392,8 @@ async def find_active_postings_by_company_and_title(company_name: str,
       [{"id", "company", "title", "url", "location"}], 최근 확인 순 최대 20건.
     """
     clean_keywords = [keyword.strip() for keyword in (title_keywords or []) if keyword and keyword.strip()]
-    p = await pool()
-    rows = await p.fetch(
+    connection_pool = await pool()
+    rows = await connection_pool.fetch(
         """SELECT j.id, c.name AS company, j.title, j.url, j.location
            FROM job_postings j JOIN companies c ON c.id = j.company_id
            WHERE j.is_active AND c.name ILIKE $1
@@ -409,8 +409,8 @@ async def list_companies() -> list[dict]:
 
     사이트별 최근 크롤링 결과는 list_latest_scrape_status_by_source로 따로 조회한다.
     """
-    p = await pool()
-    rows = await p.fetch(
+    connection_pool = await pool()
+    rows = await connection_pool.fetch(
         """SELECT name, industry, portal_url, access_method, notes
            FROM companies ORDER BY name""")
     return [dict(r) for r in rows]
