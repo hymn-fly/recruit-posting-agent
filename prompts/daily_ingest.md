@@ -90,6 +90,4 @@ uv run python mcp_server/collect_server.py --transport streamable-http --port 80
 
 ## 사전 준비
 
-```bash
-uv run python scripts/seed_companies.py   # companies 테이블에 23개 회사 등록 (최초 1회)
-```
+수집 대상 회사는 DB `companies` 테이블이 원본이다. 회사를 추가·수정할 때는 DB에서 직접 바꾼다.

@@ -9,7 +9,6 @@ make-agents/
 ├── mcp_server/      # DB 접근 계층: MCP 서버 3개 + 공통 DB 코드 + 임베딩
 ├── db/              # Postgres 스키마
 ├── scripts/         # 1회성/관리용 CLI
-├── scrapers/        # 수집 대상 회사 목록
 ├── prompts/         # Claude Desktop 예약 작업 프롬프트
 ├── tests/           # unit_tests(가짜 LLM·도구) / integration_tests(실제 DB·API)
 └── README.md, PLAN.md, CHANGELOG.md, pyproject.toml, uv.lock, .env.example
@@ -53,10 +52,8 @@ make-agents/
 ### 그 밖
 | 경로 | 내용 |
 |---|---|
-| `scripts/seed_companies.py` | `scrapers/companies.py`의 회사들을 DB에 등록(최초 1회) |
 | `scripts/embed_postings.py` | 임베딩이 없거나 바뀐 공고 백필 |
 | `scripts/ingest_profile.py` | 이력서·경력기술서·포트폴리오(PDF/DOCX/MD/TXT) 적재 |
-| `scrapers/companies.py` | 수집 대상 회사 메타데이터(URL, 접근 방식, 필터 조건) |
 | `prompts/daily_ingest.md` | Claude Desktop 예약 작업 프롬프트와 MCP 등록 방법 |
 | `tests/conftest.py` | 가짜 LLM(`fake_llm`)·가짜 MCP 도구(`make_tools`)·`--run-integration` 옵션 |
 | `tests/unit_tests/` | Agent별 단위 테스트(네트워크 없음, 1초 내) |

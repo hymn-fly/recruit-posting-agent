@@ -389,6 +389,13 @@
 - **검증**: 실제 LLM·DB로 세 가지 질문을 4번씩, 12번 모두 빈 추천 없이 나왔고 개수는 요청대로(5/10/3건)였다. 단위 테스트로 프롬프트에 "이미 걸러진 후보" 안내·빈 목록 금지·`deadline`이 들어가는지 확인한다. `uv run pytest` 36 passed / 5 skipped.
 - **참고**: 이 로그를 만든 작업 폴더의 `job_search_graph.py`에는 #35·#36에서 넣은 수정(`_brief`의 `deadline`, 추천 개수, 플래너 마감 규칙, `result_count`를 검색에 넘기지 않는 처리)이 빠져 있었다. 작업 폴더 쪽에는 이를 되살렸고, 로깅 변경은 건드리지 않았다. `result_count`를 검색 도구에 넘기면 알 수 없는 인자라 호출이 실패할 수 있다.
 
+### #38 `scrapers/` 폴더와 회사 시드 스크립트 제거 (DB `companies`를 유일한 원본으로)
+- **무엇을**: `scrapers/companies.py`(23개 회사 메타데이터)와 이를 DB에 넣던 `scripts/seed_companies.py`를 삭제했다. README의 폴더 구조·경로 표와 `prompts/daily_ingest.md`의 "사전 준비"에서 관련 안내를 지우고, 회사 정보는 DB가 원본이라고 적었다.
+- **왜**: 앱·에이전트 코드는 `scrapers`를 import하지 않았고, 참조하는 곳은 시드 스크립트뿐이었다. 시딩은 이미 끝나 `companies`에 23행이 있어서, 같은 내용이 파일과 DB 두 곳에 있었다. 한쪽만 고치면 서로 어긋난다.
+- **변경**: `scrapers/`(삭제), `scripts/seed_companies.py`(삭제), `README.md`, `prompts/daily_ingest.md`. `PLAN.md`와 이전 CHANGELOG 항목은 당시 기록이라 그대로 뒀다.
+- **검증**: `scrapers`·`seed_companies` 참조가 코드에 남아 있지 않은지 grep으로 확인했다(남은 곳은 PLAN.md와 CHANGELOG의 과거 기록뿐).
+- **주의**: 새 DB를 만들면 `companies`를 다시 채울 방법이 코드에 없다. 필요하면 git 이력(`e97d754`)에서 `scrapers/companies.py`를 복원한다.
+
 ---
 
 ## 미해결 / 다음 후보
