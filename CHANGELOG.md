@@ -415,6 +415,12 @@
 - **검증**: `uv run ruff check` All checks passed. `uv run pytest` 36 passed / 5 skipped. 이름 변경은 동작을 바꾸지 않고(`graph.compile()` 등 호출 구조 동일), 앱 코드에서 `N` 위반은 0건이었다.
 - **주의(한계)**: ruff `N`은 이름 **형식**만 검사하므로 `g` 같은 짧은 이름은 앞으로도 잡지 못한다(길이 규칙은 ruff에 없다). 또 `N802`는 한글이 든 함수 이름을 전부 위반으로 본다(한글에 대소문자가 없어서). 테스트 이름이 한글 문장이라 `backend/tests/**`에만 `N802`를 예외로 뒀다. 처음에 이를 대문자 문제로 오해해 테스트 이름을 소문자로 바꿨다가 효과가 없어 되돌렸다.
 
+### #41 ruff 네이밍 검사(N) 제거
+- **무엇을**: #40에서 넣은 ruff(dev 의존성, `pyproject.toml`의 `[tool.ruff]` 설정, README의 "코드 스타일 검사" 절)를 제거했다. #40의 변수명 변경(`g`→`graph` 등)은 그대로 둔다.
+- **왜**: ruff `N`은 이름의 형식(snake_case 등)만 검사하고 길이는 검사하지 않아서, 목적이던 "짧은 변수명 금지"를 잡지 못한다. 한글 테스트 이름도 `N802`에 모두 걸려 예외 설정이 필요했다. 얻는 것보다 설정 부담이 커서 뺐다.
+- **변경**: `pyproject.toml`, `uv.lock`, `README.md`
+- **검증**: `uv run pytest` 36 passed / 5 skipped. `pyproject.toml`·`README.md`에 ruff 언급이 남지 않았는지 grep으로 확인.
+
 ---
 
 ## 미해결 / 다음 후보

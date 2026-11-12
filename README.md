@@ -74,14 +74,6 @@ uv run pytest --run-integration -k job_search -s          # Agent 하나만: job
 ```
 - 프로필 자료가 없으면 `profile_gap` 통합 테스트는 건너뛴다.
 
-## 코드 스타일 검사
-```bash
-uv run ruff check   # pep8-naming(N): 변수·함수 snake_case, 클래스 CapWords, 상수 UPPER_CASE
-```
-- ruff는 이름의 **형식**만 검사하고 **길이**는 검사하지 않는다. `g` 같은 짧은 이름은 잡지 못하므로 "의미 있는 이름" 규칙(CLAUDE.md)은 리뷰로 지킨다.
-- 한글 이름은 ruff가 "소문자"로 인정하지 않아 `N802`가 걸린다. 한글 문장으로 쓰는 테스트(`backend/tests`)에서만 예외로 둔다.
-- `company_research` 통합 테스트는 결과를 `company_research` 테이블에 저장한다(14일 캐시로 재사용).
-
 ## 전체 동작 흐름
 
 ### 1. 구성도
