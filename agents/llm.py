@@ -39,6 +39,7 @@ class LLM:
     def __init__(self, max_output_tokens: int | None = None, schema=None,
                  primary: str = PRIMARY_MODEL, fallback: str = FALLBACK_MODEL,
                  primary_timeout: float = PRIMARY_TIMEOUT):
+        self.schema_name = schema.__name__ if schema is not None else "text"
         self.primary_name, self.fallback_name = primary, fallback
         self.primary_timeout = primary_timeout
 
@@ -50,6 +51,23 @@ class LLM:
             self._fallback = self._fallback.with_structured_output(schema)
 
     async def ainvoke(self, prompt: str):
+        started = time.perf_counter()
+        log.info("llm.start schema=%s primary=%s prompt_chars=%d", self.schema_name, self.primary_name, len(prompt))
+        try:
+            result = await self._invoke_impl(prompt)
+            log.info("llm.done schema=%s elapsed=%.2fs", self.schema_name, time.perf_counter() - started)
+            return result
+        except asyncio.CancelledError:
+            log.warning("llm.cancelled schema=%s elapsed=%.2fs", self.schema_name, time.perf_counter() - started)
+            raise
+        except Exception:
+            log.exception("llm.failed schema=%s elapsed=%.2fs", self.schema_name, time.perf_counter() - started)
+            raise
+
+    async def _invoke_impl(self, prompt: str):
+        remaining = _primary_down_until.get(self.primary_name, 0) - time.monotonic()
+        if remaining > 0:
+            log.info("llm.primary_skipped model=%s cooldown_remaining=%.1fs", self.primary_name, remaining)
         if time.monotonic() >= _primary_down_until.get(self.primary_name, 0):
             try:
                 return await asyncio.wait_for(self._primary.ainvoke(prompt), self.primary_timeout)
@@ -60,8 +78,10 @@ class LLM:
                 _primary_down_until[self.primary_name] = time.monotonic() + PRIMARY_COOLDOWN
         for i in range(FALLBACK_RETRIES):
             try:
+                log.info("llm.fallback model=%s schema=%s attempt=%d/%d", self.fallback_name, self.schema_name, i + 1, FALLBACK_RETRIES)
                 return await self._fallback.ainvoke(prompt)
             except Exception:
+                log.exception("llm.fallback_failed model=%s attempt=%d", self.fallback_name, i + 1)
                 if i == FALLBACK_RETRIES - 1:
                     raise
                 await asyncio.sleep(2 ** i)

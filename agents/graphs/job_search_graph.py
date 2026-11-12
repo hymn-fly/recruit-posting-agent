@@ -6,6 +6,7 @@ plan에서 질문을 semantic_search_jobs 파라미터로 바꾼다. 직무명(�
 """
 import json
 import logging
+import time
 
 from langgraph.graph import END, START, StateGraph
 
@@ -78,36 +79,50 @@ def make_graph(tools: dict):
     ranker = LLM(schema=Ranking, primary_timeout=30)
 
     async def plan(state: JobSearchState) -> JobSearchState:
+        log.info("plan.start input_chars=%d", len(state["question"]))
         p = await planner.ainvoke(
             PLAN_PROMPT
             + f"사용자 프로필 요약: {state.get('profile') or '(없음)'}\n"
             + f"요청: {state['question']}")
-        log.info("plan: 요청 %r\n  → 검색 파라미터 %s", state["question"],
+        log.info("plan.done: 검색 파라미터 %s",
                  json.dumps(p.model_dump(exclude_none=True), ensure_ascii=False))
         return {"plan": p}
 
     async def retrieve(state: JobSearchState) -> JobSearchState:
         # 값이 있는 파라미터만 넘긴다 (빈 리스트·빈 문자열도 제외)
-        # result_count는 추천 개수라서 검색 도구에는 넘기지 않는다
+        # result_count는 추천 개수라서 검색 도구에 넘기지 않는다
         search_args = {k: v for k, v in state["plan"].model_dump(exclude={"result_count"}).items() if v}
-        raw = await tools["semantic_search_jobs"].ainvoke({**search_args, "limit": TOP_K})
+        started = time.perf_counter()
+        log.info("retrieve.start tool=semantic_search_jobs args=%s", json.dumps({**search_args, "limit": TOP_K}, ensure_ascii=False))
+        try:
+            raw = await tools["semantic_search_jobs"].ainvoke({**search_args, "limit": TOP_K})
+        except Exception:
+            log.exception("retrieve.failed elapsed=%.2fs", time.perf_counter() - started)
+            raise
+        log.info("retrieve.tool_done elapsed=%.2fs raw_type=%s", time.perf_counter() - started, type(raw).__name__)
         results = parse_mcp_tool_result(raw)
+        if not results:
+            log.warning("retrieve.empty tool_result=%s", repr(raw)[:1000])
         log.info("retrieve: semantic_search_jobs 결과 %d건%s", len(results),
                  "\n" + format_search_rows_for_log(results) if results else "")
         return {"results": results}
 
     async def rerank_explain(state: JobSearchState) -> JobSearchState:
         if not state["results"]:
+            log.warning("rerank.skip reason=empty_search_results")
             cond = state["plan"].model_dump(exclude_none=True)
             return {"candidates": [], "answer": f"현재 조건에 맞는 공고가 없습니다. (검색 조건: {cond})"}
 
         # 후보 중 요청한 개수(기본 5건, 최대 10건)를 LLM이 고르고, 검색 결과에 없는 id는 버린다
         plan = state["plan"]
         pick_count = min(max(plan.result_count or DEFAULT_RESULT_COUNT, 1), MAX_RESULT_COUNT)
+
         deadline_order_rule = (
             "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고, 앞에서부터 요청(자격요건 등 조건이 "
             "있으면 그 조건)에 맞는 것을 고른다. "
             "마감일은 후보의 deadline 필드 값만 쓴다.\n" if plan.sort_by_deadline else "")
+        log.info("rerank.start input_candidates=%d pick_count=%d", len(state["results"]), pick_count)
+        
         ranking = await ranker.ainvoke(
             # 후보는 이미 DB 필터·의미 검색으로 걸러진 것이다. 그 조건을 다시 판단시키면 LLM이 근거를 못 찾고 빈 목록을 낸다
             "아래 후보는 이미 검색 조건(직무·마감일 정렬·지역·경력 등 DB 필터와 의미 검색)으로 걸러진 공고다. "
@@ -124,6 +139,7 @@ def make_graph(tools: dict):
         log.info("rerank_explain: 추천 %s", [c["id"] for c in candidates])
 
         if not candidates:
+            log.warning("rerank.empty returned_ids=%s valid_ids=%s", [p.id for p in ranking.picks], list(by_id))
             return {"candidates": [], "answer": "검색은 됐지만 요청과 잘 맞는 공고를 찾지 못했습니다."}
         return {"candidates": candidates,
                 "answer": "추천 공고:\n" + format_candidates(candidates)

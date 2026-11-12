@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "채용공고 적재/질의 에이전트 (LangGraph + Neon + 커스텀 MCP)"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.20",
     "langgraph>=0.2",
     "langchain-mcp-adapters",
     "mcp",

@@ -49,6 +49,7 @@ def make_graph(tools: dict, checkpointer=None):
     router = LLM(schema=Route, primary_timeout=15)
 
     async def supervisor(state: AppState) -> AppState:
+        log.info("supervisor.start steps=%d candidates=%d selected=%s", state.get("steps", 0), len(state.get("candidates") or []), (state.get("selected_posting") or {}).get("id"))
         done = [o["agent"] for o in state.get("turn_outputs", [])]
         if state.get("steps", 0) >= MAX_STEPS:
             return {"route": Route(next="FINISH", reason="이번 턴 최대 실행 수 도달").model_dump()}
@@ -103,11 +104,13 @@ def make_graph(tools: dict, checkpointer=None):
         if state["route"]["use_profile"]:
             profile = _profile_brief(get_first_mcp_result(await tools["get_profile_summary"].ainvoke({})))
         try:
+            log.info("job_search.start use_profile=%s", state["route"]["use_profile"])
             res = await job_graph.ainvoke({"question": _last_user(state), "profile": profile})
         except Exception as e:
             log.exception("job_search 실패")
             return {"steps": state.get("steps", 0) + 1,
                     "turn_outputs": _output(state, "job_search", f"⚠️ 채용공고 조회 실패: {e!r}"[:300])}
+        log.info("job_search.done candidates=%d answer_chars=%d", len(res.get("candidates") or []), len(res.get("answer", "")))
         upd: AppState = {"steps": state.get("steps", 0) + 1,
                          "turn_outputs": _output(state, "job_search", res["answer"])}
         if res.get("candidates"):
@@ -140,6 +143,7 @@ def make_graph(tools: dict, checkpointer=None):
             return {"steps": state.get("steps", 0) + 1,
                     "turn_outputs": _output(state, "profile_gap", f"⚠️ 내 프로필 분석 실패: {e!r}"[:300])}
         return {"steps": state.get("steps", 0) + 1, "gap_report": res["answer"],
+                "gap_posting_id": posting["id"],
                 "turn_outputs": _output(state, "profile_gap", res["answer"])}
 
     async def finish(state: AppState) -> AppState:
@@ -151,6 +155,7 @@ def make_graph(tools: dict, checkpointer=None):
                 text += f"\n\n{state['route']['reply']}"
         else:
             text = state["route"]["reply"] or "무엇을 도와드릴까요? (공고 찾기 / 기업분석 / 내 역량 비교)"
+        log.info("finish outputs=%s answer_chars=%d", [o["agent"] for o in outs], len(text))
         return {"messages": [AIMessage(content=text)]}
 
     def route_next(state: AppState) -> str:

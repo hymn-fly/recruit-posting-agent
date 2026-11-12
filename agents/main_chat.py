@@ -20,10 +20,11 @@ os.environ["LANGCHAIN_PROJECT"] = "recruit-agents"
 
 from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 
+from agents.observability import configure_logging  # noqa: E402
 from agents.mcp_client import open_tools, parse_mcp_tool_result  # noqa: E402
 from agents.graphs.supervisor import make_graph, turn_input  # noqa: E402
 
-logging.basicConfig(level=logging.WARNING, format="  [%(name)s] %(message)s")
+configure_logging("cli.log")
 for logger_name in ("agents.graphs.supervisor", "agents.graphs.job_search_graph",
                     "agents.graphs.company_research_graph"):
     logging.getLogger(logger_name).setLevel(logging.INFO)
