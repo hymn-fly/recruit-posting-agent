@@ -82,3 +82,17 @@ async def test_개수를_말하지_않으면_5건까지_추천하고_상한은_1
         out = await job_search_graph.make_graph(make_tools(semantic_search_jobs=results)).ainvoke(
             {"question": "LLM 공고"})
         assert len(out["candidates"]) == expected_count
+
+
+async def test_재순위_프롬프트는_후보가_이미_걸러졌음을_알리고_빈_목록을_막는다(fake_llm, make_tools, make_posting):
+    # 마감 같은 조건을 후보에서 확인할 수 없다고 LLM이 판단해 빈 목록을 내던 문제(CHANGELOG #37)의 회귀 방지
+    tools = make_tools(semantic_search_jobs=[make_posting(id=1, deadline="2026-11-13")])
+    fake_llm.set(JobSearchPlan, JobSearchPlan(category="AI Engineer", sort_by_deadline=True))
+    fake_llm.set(Ranking, Ranking(picks=[Pick(id=1, reason="마감 임박")]))
+
+    await job_search_graph.make_graph(tools).ainvoke({"question": "마감이 얼마 남지 않은 AI Engineer 공고"})
+
+    prompt = fake_llm.prompts[Ranking][0]
+    assert "이미 검색 조건" in prompt and "다시 판단하지 말고" in prompt
+    assert "빈 목록을 돌려주지 말고" in prompt
+    assert '"deadline": "2026-11-13"' in prompt
