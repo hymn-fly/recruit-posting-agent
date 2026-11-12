@@ -51,7 +51,7 @@ def make_graph(tools: dict, checkpointer=None):
     router = LLM(schema=Route, primary_timeout=15)
 
     async def supervisor(state: AppState) -> AppState:
-        log.info("supervisor.start steps=%d candidates=%d selected=%s", state.get("steps", 0), len(state.get("candidates") or []), (state.get("selected_posting") or {}).get("id"))
+        log.info("event=supervisor_start steps=%d candidates=%d selected_posting_id=%s", state.get("steps", 0), len(state.get("candidates") or []), (state.get("selected_posting") or {}).get("id"))
         done = [o["agent"] for o in state.get("turn_outputs", [])]
         
         if state.get("steps", 0) >= MAX_STEPS:
@@ -100,7 +100,7 @@ def make_graph(tools: dict, checkpointer=None):
                 out["route"] = Route(next="FINISH", reason="분석할 공고가 선택되지 않음",
                                      reply="어떤 공고를 분석할까요? 먼저 공고를 검색하거나 번호/id로 알려주세요.")
                 
-        log.info("route -> %s (%s)", out["route"].next, out["route"].reason)
+        log.info("event=route_decided next=%s reason=%r", out["route"].next, out["route"].reason)
         out["route"] = out["route"].model_dump()   # checkpointer 직렬화를 위해 dict로 저장
         return out
 
@@ -112,13 +112,13 @@ def make_graph(tools: dict, checkpointer=None):
         if state["route"]["use_profile"]:
             profile = _profile_brief(get_first_mcp_result(await tools["get_profile_summary"].ainvoke({})))
         try:
-            log.info("job_search.start use_profile=%s", state["route"]["use_profile"])
+            log.info("event=job_search_start use_profile=%s", state["route"]["use_profile"])
             res = await job_graph.ainvoke({"question": _last_user(state), "profile": profile})
         except Exception as error:
-            log.exception("job_search 실패")
+            log.exception("event=job_search_failed")
             return {"steps": state.get("steps", 0) + 1,
                     "turn_outputs": _output(state, "job_search", f"⚠️ 채용공고 조회 실패: {error!r}"[:300])}
-        log.info("job_search.done candidates=%d answer_chars=%d", len(res.get("candidates") or []), len(res.get("answer", "")))
+        log.info("event=job_search_done candidates=%d answer_chars=%d", len(res.get("candidates") or []), len(res.get("answer", "")))
         upd: AppState = {"steps": state.get("steps", 0) + 1,
                          "turn_outputs": _output(state, "job_search", res["answer"])}
         if res.get("candidates"):
@@ -134,7 +134,7 @@ def make_graph(tools: dict, checkpointer=None):
         try:
             res = await research_graph.ainvoke({"posting": posting})
         except Exception as error:
-            log.exception("company_research 실패")
+            log.exception("event=company_research_failed")
             return {"steps": state.get("steps", 0) + 1,
                     "turn_outputs": _output(state, "company_research", f"⚠️ 기업분석 실패: {error!r}"[:300])}
         return {"steps": state.get("steps", 0) + 1, "research_report": res["report"],
@@ -147,7 +147,7 @@ def make_graph(tools: dict, checkpointer=None):
         try:
             res = await gap_graph.ainvoke({"posting": posting, "research_report": research})
         except Exception as error:
-            log.exception("profile_gap 실패")
+            log.exception("event=profile_gap_failed")
             return {"steps": state.get("steps", 0) + 1,
                     "turn_outputs": _output(state, "profile_gap", f"⚠️ 내 프로필 분석 실패: {error!r}"[:300])}
         return {"steps": state.get("steps", 0) + 1, "gap_report": res["answer"],
@@ -163,7 +163,7 @@ def make_graph(tools: dict, checkpointer=None):
                 text += f"\n\n{state['route']['reply']}"
         else:
             text = state["route"]["reply"] or "무엇을 도와드릴까요? (공고 찾기 / 기업분석 / 내 역량 비교)"
-        log.info("finish outputs=%s answer_chars=%d", [o["agent"] for o in outs], len(text))
+        log.info("event=finish agents=%s answer_chars=%d", [o["agent"] for o in outs], len(text))
         return {"messages": [AIMessage(content=text)]}
 
     def route_next(state: AppState) -> str:

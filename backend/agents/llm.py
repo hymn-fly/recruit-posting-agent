@@ -52,36 +52,36 @@ class LLM:
 
     async def ainvoke(self, prompt: str):
         started = time.perf_counter()
-        log.info("llm.start schema=%s primary=%s prompt_chars=%d", self.schema_name, self.primary_name, len(prompt))
+        log.info("event=llm_start schema=%s primary=%s prompt_chars=%d", self.schema_name, self.primary_name, len(prompt))
         try:
             result = await self._invoke_impl(prompt)
-            log.info("llm.done schema=%s elapsed=%.2fs", self.schema_name, time.perf_counter() - started)
+            log.info("event=llm_done schema=%s elapsed_seconds=%.2f", self.schema_name, time.perf_counter() - started)
             return result
         except asyncio.CancelledError:
-            log.warning("llm.cancelled schema=%s elapsed=%.2fs", self.schema_name, time.perf_counter() - started)
+            log.warning("event=llm_cancelled schema=%s elapsed_seconds=%.2f", self.schema_name, time.perf_counter() - started)
             raise
         except Exception:
-            log.exception("llm.failed schema=%s elapsed=%.2fs", self.schema_name, time.perf_counter() - started)
+            log.exception("event=llm_failed schema=%s elapsed_seconds=%.2f", self.schema_name, time.perf_counter() - started)
             raise
 
     async def _invoke_impl(self, prompt: str):
         remaining = _primary_down_until.get(self.primary_name, 0) - time.monotonic()
         if remaining > 0:
-            log.info("llm.primary_skipped model=%s cooldown_remaining=%.1fs", self.primary_name, remaining)
+            log.info("event=llm_primary_skipped model=%s cooldown_remaining_seconds=%.1f", self.primary_name, remaining)
         if time.monotonic() >= _primary_down_until.get(self.primary_name, 0):
             try:
                 return await asyncio.wait_for(self._primary.ainvoke(prompt), self.primary_timeout)
             except Exception as error:  # 타임아웃(10초 초과) 포함, 기본 모델 실패 시 전환
                 reason = f"{self.primary_timeout}초 초과" if isinstance(error, TimeoutError) else repr(error)[:120]
-                log.warning("%s 실패(%s) -> %s로 전환, %d초간 건너뜀",
+                log.warning("event=llm_primary_failed model=%s reason=%r fallback_model=%s cooldown_seconds=%d",
                             self.primary_name, reason, self.fallback_name, PRIMARY_COOLDOWN)
                 _primary_down_until[self.primary_name] = time.monotonic() + PRIMARY_COOLDOWN
         for attempt in range(FALLBACK_RETRIES):
             try:
-                log.info("llm.fallback model=%s schema=%s attempt=%d/%d", self.fallback_name, self.schema_name, attempt + 1, FALLBACK_RETRIES)
+                log.info("event=llm_fallback_attempt model=%s schema=%s attempt=%d max_attempts=%d", self.fallback_name, self.schema_name, attempt + 1, FALLBACK_RETRIES)
                 return await self._fallback.ainvoke(prompt)
             except Exception:
-                log.exception("llm.fallback_failed model=%s attempt=%d", self.fallback_name, attempt + 1)
+                log.exception("event=llm_fallback_failed model=%s attempt=%d", self.fallback_name, attempt + 1)
                 if attempt == FALLBACK_RETRIES - 1:
                     raise
                 await asyncio.sleep(2 ** attempt)

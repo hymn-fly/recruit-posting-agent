@@ -26,13 +26,13 @@ profile_lock = asyncio.Lock()
 @asynccontextmanager
 async def lifespan(app):
     configure_logging()
-    log.info("startup: MCP 도구 연결 시작")
+    log.info("event=startup_mcp_connecting")
     async with open_tools() as tools:
         app.state.graph = make_graph(tools, checkpointer=InMemorySaver())
-        log.info("startup: MCP 연결 완료 tools=%s", sorted(tools))
+        log.info("event=startup_mcp_connected tools=%s", sorted(tools))
         try:
             await db.pool()
-            log.info("startup: DB 연결 완료")
+            log.info("event=startup_db_connected")
             yield
         finally:
             if db._pool is not None:
@@ -48,14 +48,14 @@ async def log_requests(request, call_next):
     rid = uuid4().hex[:12]
     token = request_id.set(rid)
     started = time.perf_counter()
-    log.info("http.start method=%s path=%s", request.method, request.url.path)
+    log.info("event=http_start method=%s path=%s", request.method, request.url.path)
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = rid
-        log.info("http.end status=%s elapsed=%.2fs", response.status_code, time.perf_counter() - started)
+        log.info("event=http_end status=%s elapsed_seconds=%.2f", response.status_code, time.perf_counter() - started)
         return response
     except Exception:
-        log.exception("http.failed elapsed=%.2fs", time.perf_counter() - started)
+        log.exception("event=http_failed elapsed_seconds=%.2f", time.perf_counter() - started)
         raise
     finally:
         request_id.reset(token)
@@ -65,7 +65,7 @@ async def log_requests(request, call_next):
 @app.exception_handler(Exception)
 async def unexpected_error(request, exc):
     from fastapi.responses import JSONResponse
-    log.exception("API 처리 실패", exc_info=exc)
+    log.exception("event=api_unhandled_error", exc_info=exc)
     return JSONResponse(status_code=500, content={"detail": "처리에 실패했습니다. 서버 로그와 API 키·DB 연결을 확인해 주세요."})
 
 
@@ -109,22 +109,22 @@ class Message(BaseModel):
 async def chat(sid: str, body: Message):
     cfg = config(sid)
     started = time.perf_counter()
-    log.info("chat.queued session=%s input_chars=%d", sid, len(body.text))
+    log.info("event=chat_queued session=%s input_chars=%d", sid, len(body.text))
     
     async with sessions[sid]:
-        log.info("chat.start session=%s lock_wait=%.2fs", sid, time.perf_counter() - started)
+        log.info("event=chat_start session=%s lock_wait_seconds=%.2f", sid, time.perf_counter() - started)
         try:
             await app.state.graph.ainvoke(turn_input(body.text), cfg)
             result = await snapshot(sid)
-            log.info("chat.done session=%s candidates=%d messages=%d selected=%s elapsed=%.2fs",
+            log.info("event=chat_done session=%s candidates=%d messages=%d selected_posting_id=%s elapsed_seconds=%.2f",
                      sid, len(result["candidates"]), len(result["messages"]),
                      (result["selected_posting"] or {}).get("id"), time.perf_counter() - started)
             return result
         except asyncio.CancelledError:
-            log.warning("chat.cancelled session=%s elapsed=%.2fs", sid, time.perf_counter() - started)
+            log.warning("event=chat_cancelled session=%s elapsed_seconds=%.2f", sid, time.perf_counter() - started)
             raise
         except Exception:
-            log.exception("chat.failed session=%s elapsed=%.2fs", sid, time.perf_counter() - started)
+            log.exception("event=chat_failed session=%s elapsed_seconds=%.2f", sid, time.perf_counter() - started)
             raise
 
 

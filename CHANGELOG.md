@@ -430,6 +430,17 @@
 - **검증**: `uv run pylint backend mcp_server common` 10.00/10. 이름 변경이 일부만 반영된 곳이 없는지 `undefined-variable`·`used-before-assignment`·`unused-variable`로 검사해 새 경고가 없었다. `uv run pytest` 36 passed / 5 skipped. 서버를 실제로 띄워 `/jobs`, `/jobs?q=`(없는 검색어는 `total: 0`), `/collection`, `/documents`가 200이고, MCP 도구 `get_job_posting`·`list_companies`·`list_known_urls`·`get_profile_summary`·`list_profile_documents`·`embed_pending_postings`가 정상 호출되는지 확인했다.
 - **주의**: `id`는 MCP 도구 파라미터라 예외로 뒀다. 이름 변경은 범위를 제한한 토큰 단위 치환(속성 접근·키워드 인자 제외, 새 이름 충돌 시 중단)으로 했다. `embed_pending_postings`는 쓰기 도구인데 검증용으로 한 번 호출했고, 대기 중인 공고가 있었다면 임베딩됐을 수 있다(직전까지 `remaining: 0`이었다). `backend/tests`는 아직 검사하지 않는다(테스트 함수 이름에 영문 대문자가 든 것 등 42건이 남아 있다).
 
+### #43 로그 양식을 `event=<이름> key=value`로 통일
+- **무엇을**: 로그 호출 47개를 모두 `event=<snake_case 이름>`으로 시작하고 나머지는 `key=value`인 한 줄로 바꿨다(`llm.py`, `supervisor.py`, `job_search_graph.py`, `company_research_graph.py`, `api/main.py`, `query_server.py`).
+  - 이벤트 이름의 점을 밑줄로 바꿨다: `rerank.start` → `event=rerank_start`, `search.sql.done` → `event=search_sql_done`.
+  - 섞여 있던 콜론형(`retrieve: ...`, `search_topic[x]: ...`)과 한글 문장(`job_search 실패`)도 같은 양식으로 맞췄다: `event=job_search_failed`, `event=search_topic_tavily_failed topic=... query=... error_type=... error=...`.
+  - 값 규칙: 자유 텍스트(제목·회사명·검색어·오류 메시지)는 `%r`로 따옴표를 붙이고, 시간은 키에 단위를 넣었다(`elapsed=0.50s` → `elapsed_seconds=0.50`, `lock_wait_seconds`, `cooldown_remaining_seconds`).
+  - 여러 줄로 찍던 것을 한 줄로 풀었다: 검색 후보 표는 행마다 `event=retrieve_row rank=1 id=... company='...' title='...' similarity=0.80 deadline=...`(`format_search_rows_for_log` → `format_search_row_for_log`), 기업분석 계획과 캐시 조회는 `event=plan_queries_done ...`, `event=load_cache_done ...`.
+- **왜**: 이벤트 이름이 파일명(`name.ext`)이나 로그 앞의 모듈 경로(`[agents.llm]`)와 같은 점 표기라 헷갈렸고, 메시지 양식이 3가지(이벤트형·콜론형·한글 문장)로 섞여 있어서. `event=` 필드를 붙여 이벤트임을 분명히 하고 `grep 'event=rerank_'`, `grep 'request=<ID>'`로 찾게 했다.
+- **변경**: `backend/agents/llm.py`, `backend/agents/graphs/{supervisor,job_search_graph,company_research_graph}.py`, `backend/api/main.py`, `mcp_server/query_server.py`, `backend/tests/unit_tests/test_company_research_agent.py`(로그 메시지 검사를 새 양식으로), `frontend/README.md`(처리 로그 설명)
+- **검증**: `uv run pylint backend mcp_server common` 10.00/10. 로그 변경만 담은 격리된 사본에서 `uv run pytest`가 통과했다. 로그 출력 예시(`event=retrieve_row rank=1 id=1 company='SK' title='공고1' similarity=0.80 deadline=2026-12-31`)를 직접 확인했다.
+- **주의**: 이전 이벤트 이름(`chat.queued` 등)으로 grep하던 습관·스크립트는 새 이름으로 바꿔야 한다. 이 커밋에는 작업 트리에 있던 별개의 미커밋 변경(`job_search_graph.py`에서 `retrieve → rerank_explain` 연결을 주석 처리하고 `retrieve → END`로 바꾼 것)은 포함하지 않았다. 그 변경이 있으면 재순위가 실행되지 않아 `test_job_search_agent.py`의 7개 테스트가 실패한다.
+
 ---
 
 ## 미해결 / 다음 후보

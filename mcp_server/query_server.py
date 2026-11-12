@@ -114,7 +114,7 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
     """
     started = time.perf_counter()
     limit = max(1, min(int(limit), 100))
-    log.info("search.start title_keywords=%s company=%s category=%s location=%s max_years=%s active=%s deadline_days=%s deadline_sort=%s limit=%d",
+    log.info("event=search_start title_keywords=%s company=%r category=%r location=%r max_years=%s active=%s deadline_days=%s deadline_sort=%s limit=%d",
              title_keywords, company_name, category, location, max_years, only_active, deadline_within_days, sort_by_deadline, limit)
 
     # 1) WHERE로 확정할 수 있는 조건부터 건다
@@ -126,9 +126,9 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
     field_queries = {"q_responsibilities": q_responsibilities, "q_required": q_required,
                      "q_preferred": q_preferred}
     asked_fields = [name for name, text in field_queries.items() if text and text.strip()]
-    log.info("search.embedding.start fields=%s", asked_fields)
+    log.info("event=search_embedding_start fields=%s", asked_fields)
     query_vectors = await asyncio.gather(*(embed_query(field_queries[name]) for name in asked_fields))
-    log.info("search.embedding.done elapsed=%.2fs", time.perf_counter() - started)
+    log.info("event=search_embedding_done elapsed_seconds=%.2f", time.perf_counter() - started)
     similarity_selects, similarity_keys = [], []
     for name, vector in zip(asked_fields, query_vectors):
         embedding_column, similarity_key = FIELD_QUERY_TO_EMBEDDING[name]
@@ -148,14 +148,14 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
         order_and_limit = f"ORDER BY j.deadline ASC, j.last_seen_at DESC LIMIT {limit}"
     else:
         order_and_limit = f"ORDER BY j.last_seen_at DESC LIMIT {limit}"
-    log.info("search.sql.start filters=%s semantic_fields=%s", conditions, asked_fields)
+    log.info("event=search_sql_start filters=%s semantic_fields=%s", conditions, asked_fields)
     connection_pool = await pool()
     rows = [_row(r) for r in await connection_pool.fetch(
         f"SELECT {select_columns} FROM job_postings j JOIN companies c ON c.id = j.company_id "
         f"{where} {order_and_limit}", *args)]
-    log.info("search.sql.done rows=%d elapsed=%.2fs", len(rows), time.perf_counter() - started)
+    log.info("event=search_sql_done rows=%d elapsed_seconds=%.2f", len(rows), time.perf_counter() - started)
     if not rows:
-        log.warning("search.empty reason=no_rows_after_sql_filters filters=%s", conditions)
+        log.warning("event=search_empty reason=no_rows_after_sql_filters filters=%s", conditions)
     if not similarity_keys:
         return [{**row, "similarity": None} for row in rows]
 
@@ -172,7 +172,7 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
     #    deadline은 _row가 ISO 문자열(YYYY-MM-DD)로 바꿔 두었고 require_deadline으로 비어 있지 않다
     if sort_by_deadline:
         top_rows.sort(key=lambda row: (row["deadline"], -row["similarity"]))
-    log.info("search.done sql_rows=%d scored_rows=%d returned=%d ids=%s elapsed=%.2fs", len(rows), len(scored_rows), len(top_rows), [r["id"] for r in top_rows], time.perf_counter() - started)
+    log.info("event=search_done sql_rows=%d scored_rows=%d returned=%d ids=%s elapsed_seconds=%.2f", len(rows), len(scored_rows), len(top_rows), [r["id"] for r in top_rows], time.perf_counter() - started)
     return top_rows
 
 
@@ -229,5 +229,5 @@ async def save_research(company_name: str, target_company: str, topics: list[dic
 
 if __name__ == "__main__":
     configure_logging("job-query.log")
-    log.info("job-query.ready: 검색 요청 대기 중")
+    log.info("event=job_query_ready")
     mcp.run()

@@ -68,7 +68,8 @@ async def test_Tavily_검색어_하나가_실패해도_나머지_결과로_요�
 
     assert all(t["sources"] == [{"title": "기사", "url": f"https://news/{t['topic']}-q2"}] for t in out["topics"])
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-    assert any("Tavily 호출 실패 'industry-q1' — RuntimeError: quota exceeded" in w for w in warnings)
+    assert any("event=search_topic_tavily_failed" in w and "query='industry-q1'" in w
+               and "error_type=RuntimeError" in w and "error='quota exceeded'" in w for w in warnings)
 
 
 async def test_회사_단위_토픽이_캐시에_있으면_role만_검색한다(fake_llm, make_tools, make_posting, fake_tavily):

@@ -57,8 +57,11 @@ FastAPI를 재시작하면 터미널과 `logs/app.log`에 요청별 로그가 �
 
 ```bash
 tail -f logs/app.log logs/job-query.log
+
+grep 'event=rerank_' logs/app.log      # 특정 단계만
+grep 'request=<ID>' logs/app.log        # 요청 하나의 흐름
 ```
 
-`chat.queued` → `chat.start` → `supervisor.start`/`route` → `plan.done` → `retrieve.start`/`retrieve.tool_done` → `rerank.start` → `chat.done` 순서로 확인하세요. `retrieve.empty`는 도구의 빈 응답 또는 오류 내용을, `search.empty`는 DB 필터를 통과한 공고가 없음을 뜻합니다. 실패는 스택 추적과 함께 기록합니다. LLM 호출은 모델·스키마·소요 시간·폴백 재시도를 기록하며 프롬프트와 이력서 원문은 기록하지 않습니다. 검색 조건·공고 식별 정보와 예외 메시지는 로그에 포함됩니다.
+모든 로그는 `event=<이름>`으로 시작하고 나머지는 `key=value`입니다. 시간은 키에 단위를 넣고(`elapsed_seconds=0.50`), 제목·검색어·오류 메시지 같은 자유 텍스트는 따옴표로 감쌉니다. `event=chat_queued` → `event=chat_start` → `event=supervisor_start`/`event=route_decided` → `event=plan_done` → `event=retrieve_start`/`event=retrieve_tool_done` → `event=retrieve_done`(결과 건수)와 `event=retrieve_row`(후보 한 건씩) → `event=rerank_start` → `event=rerank_done` → `event=chat_done` 순서로 확인하세요. `event=retrieve_empty`는 도구의 빈 응답 또는 오류 내용을, `event=search_empty`는 DB 필터를 통과한 공고가 없음을 뜻합니다. 실패는 `event=*_failed`로 스택 추적과 함께 기록합니다. LLM 호출은 모델·스키마·소요 시간·폴백 재시도를 기록하며 프롬프트와 이력서 원문은 기록하지 않습니다. 검색 조건·공고 식별 정보와 예외 메시지는 로그에 포함됩니다.
 
 `APP_LOG_LEVEL`(기본 `INFO`), `APP_LOG_DIR`(기본 프로젝트 루트의 `logs/`)로 설정할 수 있습니다.

@@ -20,8 +20,7 @@ TOP_K = 20
 DEFAULT_RESULT_COUNT = 5   # 사용자가 개수를 말하지 않았을 때 추천할 공고 수
 MAX_RESULT_COUNT = 10      # 사용자가 더 많이 원해도 추천하는 최대 공고 수
 BRIEF_LEN = 400   # rerank 프롬프트에 넣는 필드별 최대 글자 수
-SIMILARITY_LOG_LABELS = (("점수", "similarity"), ("하는일", "sim_responsibilities"),
-                         ("필수", "sim_required"), ("우대", "sim_preferred"))
+SIMILARITY_LOG_KEYS = ("similarity", "sim_responsibilities", "sim_required", "sim_preferred")
 
 PLAN_PROMPT = (
     "사용자 요청을 채용공고 검색 파라미터로 바꿔라. 필요 없는 필드는 null.\n"
@@ -51,15 +50,16 @@ def format_similarity_for_display(value) -> str:
     return "-" if value is None else f"{value:.2f}"
 
 
-def format_search_rows_for_log(rows: list[dict]) -> str:
-    """검색 결과를 로그용 한 줄씩으로 줄인다 (본문은 빼고 식별 정보와 질의한 컬럼의 유사도만)."""
-    lines = []
-    for rank, row in enumerate(rows, 1):
-        similarities = " ".join(f"{label}={format_similarity_for_display(row.get(key))}"
-                                for label, key in SIMILARITY_LOG_LABELS if key in row)
-        deadline = f"  마감={row['deadline']}" if row.get("deadline") else ""
-        lines.append(f"    {rank:>2}. id={row.get('id')} [{row.get('company')}] {row.get('title')}  {similarities}{deadline}")
-    return "\n".join(lines)
+def format_search_row_for_log(row: dict) -> str:
+    """검색 결과 한 건을 key=value 한 줄로 줄인다 (본문은 빼고 식별 정보와 질의한 컬럼의 유사도만)."""
+    fields = [f"id={row.get('id')}", f"company={row.get('company')!r}", f"title={row.get('title')!r}"]
+
+    # 질의한 컬럼의 유사도만 남긴다
+    fields += [f"{key}={format_similarity_for_display(row.get(key))}" for key in SIMILARITY_LOG_KEYS if key in row]
+
+    if row.get("deadline"):
+        fields.append(f"deadline={row['deadline']}")
+    return " ".join(fields)
 
 
 def format_candidates(candidates: list[dict]) -> str:
@@ -79,12 +79,12 @@ def make_graph(tools: dict):
     ranker = LLM(schema=Ranking, primary_timeout=30)
 
     async def plan(state: JobSearchState) -> JobSearchState:
-        log.info("plan.start input_chars=%d", len(state["question"]))
+        log.info("event=plan_start input_chars=%d", len(state["question"]))
         search_plan = await planner.ainvoke(
             PLAN_PROMPT
             + f"사용자 프로필 요약: {state.get('profile') or '(없음)'}\n"
             + f"요청: {state['question']}")
-        log.info("plan.done: 검색 파라미터 %s",
+        log.info("event=plan_done search_params=%s",
                  json.dumps(search_plan.model_dump(exclude_none=True), ensure_ascii=False))
         return {"plan": search_plan}
 
@@ -93,23 +93,24 @@ def make_graph(tools: dict):
         # result_count는 추천 개수라서 검색 도구에 넘기지 않는다
         search_args = {k: v for k, v in state["plan"].model_dump(exclude={"result_count"}).items() if v}
         started = time.perf_counter()
-        log.info("retrieve.start tool=semantic_search_jobs args=%s", json.dumps({**search_args, "limit": TOP_K}, ensure_ascii=False))
+        log.info("event=retrieve_start tool=semantic_search_jobs args=%s", json.dumps({**search_args, "limit": TOP_K}, ensure_ascii=False))
         try:
             raw = await tools["semantic_search_jobs"].ainvoke({**search_args, "limit": TOP_K})
         except Exception:
-            log.exception("retrieve.failed elapsed=%.2fs", time.perf_counter() - started)
+            log.exception("event=retrieve_failed elapsed_seconds=%.2f", time.perf_counter() - started)
             raise
-        log.info("retrieve.tool_done elapsed=%.2fs raw_type=%s", time.perf_counter() - started, type(raw).__name__)
+        log.info("event=retrieve_tool_done elapsed_seconds=%.2f raw_type=%s", time.perf_counter() - started, type(raw).__name__)
         results = parse_mcp_tool_result(raw)
         if not results:
-            log.warning("retrieve.empty tool_result=%s", repr(raw)[:1000])
-        log.info("retrieve: semantic_search_jobs 결과 %d건%s", len(results),
-                 "\n" + format_search_rows_for_log(results) if results else "")
+            log.warning("event=retrieve_empty tool_result=%s", repr(raw)[:1000])
+        log.info("event=retrieve_done results=%d", len(results))
+        for rank, row in enumerate(results, 1):
+            log.info("event=retrieve_row rank=%d %s", rank, format_search_row_for_log(row))
         return {"results": results}
 
     async def rerank_explain(state: JobSearchState) -> JobSearchState:
         if not state["results"]:
-            log.warning("rerank.skip reason=empty_search_results")
+            log.warning("event=rerank_skipped reason=empty_search_results")
             cond = state["plan"].model_dump(exclude_none=True)
             return {"candidates": [], "answer": f"현재 조건에 맞는 공고가 없습니다. (검색 조건: {cond})"}
 
@@ -121,7 +122,7 @@ def make_graph(tools: dict):
             "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고, 앞에서부터 요청(자격요건 등 조건이 "
             "있으면 그 조건)에 맞는 것을 고른다. "
             "마감일은 후보의 deadline 필드 값만 쓴다.\n" if plan.sort_by_deadline else "")
-        log.info("rerank.start input_candidates=%d pick_count=%d", len(state["results"]), pick_count)
+        log.info("event=rerank_start input_candidates=%d pick_count=%d", len(state["results"]), pick_count)
         
         ranking = await ranker.ainvoke(
             # 후보는 이미 DB 필터·의미 검색으로 걸러진 것이다. 그 조건을 다시 판단시키면 LLM이 근거를 못 찾고 빈 목록을 낸다
@@ -136,10 +137,10 @@ def make_graph(tools: dict):
             f"후보(JSON):\n{json.dumps([_brief(r) for r in state['results']], ensure_ascii=False)}")
         by_id = {r["id"]: r for r in state["results"]}
         candidates = [{**by_id[pick.id], "reason": pick.reason} for pick in ranking.picks if pick.id in by_id][:pick_count]
-        log.info("rerank_explain: 추천 %s", [c["id"] for c in candidates])
+        log.info("event=rerank_done picked_ids=%s", [c["id"] for c in candidates])
 
         if not candidates:
-            log.warning("rerank.empty returned_ids=%s valid_ids=%s", [pick.id for pick in ranking.picks], list(by_id))
+            log.warning("event=rerank_empty returned_ids=%s valid_ids=%s", [pick.id for pick in ranking.picks], list(by_id))
             return {"candidates": [], "answer": "검색은 됐지만 요청과 잘 맞는 공고를 찾지 못했습니다."}
         return {"candidates": candidates,
                 "answer": "추천 공고:\n" + format_candidates(candidates)

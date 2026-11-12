@@ -58,10 +58,11 @@ def make_graph(tools: dict):
             + "\n".join(f"- {t}: {TOPIC_TITLES[t]}" for t in TOPIC_TITLES)
             + f"\n\n{_posting_brief(state['posting'])}\n근무지: {state['posting'].get('location') or '-'}"
         )
-        log.info("plan_queries: 공고 id=%s [%s] %s\n  → 분석 대상 %s / 산업 %s / 경쟁사 %s\n%s",
+        log.info("event=plan_queries_done posting_id=%s company=%r title=%r target_company=%r industry=%r "
+                 "competitors=%s topic_queries=%s",
                  state["posting"].get("id"), state["posting"].get("company"), state["posting"].get("title"),
-                 plan.target_company, plan.industry, ", ".join(plan.competitors),
-                 "\n".join(f"    {t.topic}: {t.queries}" for t in plan.topics))
+                 plan.target_company, plan.industry, plan.competitors,
+                 {t.topic: t.queries for t in plan.topics})
         return {"plan": plan}
 
     async def load_cache(state: ResearchState) -> ResearchState:
@@ -70,9 +71,9 @@ def make_graph(tools: dict):
         cached = get_first_mcp_result(await tools["get_cached_research"].ainvoke(cache_lookup_args))
 
         cached_company_topics = [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]
-        log.info("load_cache: %s → %s", cache_lookup_args,
-                 f"캐시 적중(research id={cached.get('id')}, {cached.get('created_at')}), 재사용 토픽 "
-                 f"{[t['topic'] for t in cached_company_topics]}" if cached else "캐시 없음")
+        log.info("event=load_cache_done lookup=%s cache_hit=%s research_id=%s cached_at=%s reused_topics=%s",
+                 cache_lookup_args, bool(cached), cached.get("id"), cached.get("created_at"),
+                 [t["topic"] for t in cached_company_topics])
         return {"cached": cached_company_topics}
 
     def fan_out(state: ResearchState):
@@ -80,7 +81,7 @@ def make_graph(tools: dict):
         sends = [Send("search_topic", {"posting": state["posting"], "plan": state["plan"],
                                        "topic": t.topic, "queries": t.queries})
                  for t in state["plan"].topics if t.topic not in done]
-        log.info("fan_out: 검색할 토픽 %s", [s.arg["topic"] for s in sends] or "없음 → 바로 synthesize")
+        log.info("event=fan_out topics_to_search=%s", [s.arg["topic"] for s in sends])
         return sends or ["synthesize"]
 
     async def search_topic(arg: dict) -> ResearchState:
@@ -95,11 +96,11 @@ def make_graph(tools: dict):
         for query, response in zip(queries, responses):
             if isinstance(response, Exception):
                 # 예외 객체는 JSON 직렬화가 안 되므로 타입명과 메시지만 남긴다 (로그 코드가 다시 예외를 내면 토픽 전체가 실패)
-                log.warning("search_topic[%s]: Tavily 호출 실패 %r — %s: %s",
+                log.warning("event=search_topic_tavily_failed topic=%s query=%r error_type=%s error=%r",
                             topic, query, type(response).__name__, str(response)[:200])
                 continue
             results = response.get("results", []) if isinstance(response, dict) else []
-            log.info("search_topic[%s]: %r → %d건 %s", topic, query, len(results),
+            log.info("event=search_topic_query topic=%s query=%r results=%d urls=%s", topic, query, len(results),
                      [r["url"] for r in results])
             for item in results:
                 if item["url"] not in seen_urls:
@@ -108,7 +109,7 @@ def make_graph(tools: dict):
                                     "content": (item.get("content") or "")[:SNIPPET_LEN]})
 
         if not sources:
-            log.warning("search_topic[%s]: 사용할 검색 결과가 없어 '확인 불가'로 둔다", topic)
+            log.warning("event=search_topic_no_results topic=%s outcome=unverified", topic)
             return {"topics": [{"topic": topic, "summary": "검색 결과 없음 — 확인 불가", "sources": []}]}
 
         # 3) 모은 출처만 근거로 토픽 요약 ([n] 번호는 이 토픽 안에서의 번호)
@@ -120,7 +121,7 @@ def make_graph(tools: dict):
             f"분석 대상: {plan.target_company} / 산업: {plan.industry} / 경쟁사: {', '.join(plan.competitors)}\n"
             f"{_posting_brief(arg['posting'])}\n\n"
             + "\n\n".join(f"[{i}] {s['title']} ({s['url']})\n{s['content']}" for i, s in enumerate(sources, 1)))
-        log.info("search_topic[%s]: 출처 %d개(중복 제거) → 요약 %d자", topic, len(sources), len(msg.text))
+        log.info("event=search_topic_done topic=%s sources=%d summary_chars=%d", topic, len(sources), len(msg.text))
 
         return {"topics": [{"topic": topic, "summary": msg.text,
                             "sources": [{"title": s["title"], "url": s["url"]} for s in sources]}]}
@@ -157,7 +158,7 @@ def make_graph(tools: dict):
         saved = get_first_mcp_result(await tools["save_research"].ainvoke(
             {"company_name": posting["company"], "target_company": plan.target_company,
              "posting_id": posting.get("id"), "topics": topics, "report_md": report}))
-        log.info("synthesize: 토픽 %d개(캐시 %d) / 출처 %d개 중 인용 %d개 / 리포트 %d자 → research id=%s 저장",
+        log.info("event=synthesize_done topics=%d cached_topics=%d sources=%d cited_sources=%d report_chars=%d research_id=%s",
                  len(topics), len(state["cached"]), len(all_sources), len(cited & set(range(1, len(all_sources) + 1))),
                  len(report), saved.get("id"))
         cache_note = (f"\n\n_(회사 단위 토픽 {len(state['cached'])}개는 최근 {CACHE_DAYS}일 내 리서치를 재사용)_"
