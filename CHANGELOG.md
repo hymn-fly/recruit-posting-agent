@@ -441,6 +441,16 @@
 - **검증**: `uv run pylint backend mcp_server common` 10.00/10. 로그 변경만 담은 격리된 사본에서 `uv run pytest`가 통과했다. 로그 출력 예시(`event=retrieve_row rank=1 id=1 company='SK' title='공고1' similarity=0.80 deadline=2026-12-31`)를 직접 확인했다.
 - **주의**: 이전 이벤트 이름(`chat.queued` 등)으로 grep하던 습관·스크립트는 새 이름으로 바꿔야 한다. 이 커밋에는 작업 트리에 있던 별개의 미커밋 변경(`job_search_graph.py`에서 `retrieve → rerank_explain` 연결을 주석 처리하고 `retrieve → END`로 바꾼 것)은 포함하지 않았다. 그 변경이 있으면 재순위가 실행되지 않아 `test_job_search_agent.py`의 7개 테스트가 실패한다.
 
+### #44 채용공고 조회에서 LLM 재순위를 잠시 끄고 검색 결과를 그대로 사용 (`USE_RERANK` 스위치)
+- **무엇을**: `job_search_graph.py`에 `USE_RERANK = False` 스위치를 추가했다. 꺼져 있으면 `plan → retrieve → fill_answer`로 끝나고, 켜면 기존처럼 `retrieve → rerank_explain`을 거친다(`rerank_explain` 코드는 그대로 둔다).
+  - `fill_answer`: LLM 없이 검색 결과 앞에서부터 요청한 개수(기본 5건, 최대 10건)를 `candidates`로 쓰고 `answer`를 만든다. 검색 도구가 이미 유사도·마감순으로 정렬해 주므로 순서를 바꾸지 않는다. 결과가 없으면 기존과 같은 "공고가 없습니다" 응답을 돌려준다. `reason`은 채우지 않는다.
+  - `format_candidates`: `reason`이 있을 때만 "→ 근거" 줄을 출력하게 했다(없으면 `KeyError`가 났다).
+  - 두 노드가 함께 쓰는 `get_pick_count`(추천 개수 규칙)와 `build_no_results_update`(결과 없음 응답)를 분리했다.
+- **왜**: 재순위 LLM 호출을 당분간 쓰지 않으려고. 이미 작업 트리에 있던 `fill_answer` 초안은 개수 제한이 없고(검색된 20건 전부 반환), 결과가 0건이면 빈 목록 안내만 나오고, `reason`이 없어 `format_candidates`에서 `KeyError`가 나는 문제가 있어 보완했다. 연결부를 주석 처리하는 대신 스위치로 바꿔, 되돌릴 때 `True`로 바꾸면 되게 했다.
+- **변경**: `backend/agents/graphs/job_search_graph.py`, `backend/tests/unit_tests/test_job_search_agent.py`, `README.md`
+- **검증**: `uv run pytest` 37 passed / 5 skipped, `uv run pylint backend mcp_server common` 10.00/10. 재순위를 검증하는 기존 테스트 4개는 `with_rerank` 픽스처로 스위치를 켜서 그대로 통과하고, 재순위 없는 경로의 새 테스트 1개(개수·순서·근거 줄 없음·재순위 LLM 미호출)를 추가했다. 실제 DB·LLM으로 "마감이 얼마 남지 않은 AI Engineer 공고 3개 추천해줘"를 실행해 3건이 마감 임박순으로, `reason` 없이 나오는 것을 확인했다.
+- **주의**: 재순위가 꺼져 있어 추천 근거(`reason`)가 없고, 요청 조건에 대한 LLM의 취사선택도 없다. 검색 결과 순서가 곧 추천 순서다(의미 검색 질의가 없으면 유사도는 `-`로 표시된다).
+
 ---
 
 ## 미해결 / 다음 후보

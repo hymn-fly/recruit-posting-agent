@@ -1,4 +1,6 @@
-"""채용공고 조회 Agent (RAG): plan -> retrieve -> rerank_explain.
+"""채용공고 조회 Agent (RAG): plan -> retrieve -> (rerank_explain | fill_answer).
+
+USE_RERANK가 True면 LLM 재순위(rerank_explain)를, False면 검색 결과 상위 N건을 그대로 쓴다(fill_answer).
 
 plan에서 질문을 semantic_search_jobs 파라미터로 바꾼다. 직무명(제목)은 키워드 필터(title_keywords),
 하는 일·필수/우대 역량은 컬럼별 의미 검색 질의(q_*)로 채운다.
@@ -17,6 +19,7 @@ from agents.state import JobSearchPlan, JobSearchState, Ranking
 log = logging.getLogger(__name__)
 
 TOP_K = 20
+USE_RERANK = False   # True: retrieve 뒤에 LLM 재순위(rerank_explain). False: 검색 결과 상위 N건을 그대로 쓴다(fill_answer)
 DEFAULT_RESULT_COUNT = 5   # 사용자가 개수를 말하지 않았을 때 추천할 공고 수
 MAX_RESULT_COUNT = 10      # 사용자가 더 많이 원해도 추천하는 최대 공고 수
 BRIEF_LEN = 400   # rerank 프롬프트에 넣는 필드별 최대 글자 수
@@ -68,10 +71,21 @@ def format_candidates(candidates: list[dict]) -> str:
         meta = " · ".join(str(v) for v in (candidate.get("category"), candidate.get("location"),
                                            f"경력 {candidate['min_years']}년+" if candidate.get("min_years") else None,
                                            f"마감 {candidate['deadline']}" if candidate.get("deadline") else None) if v)
+        reason_line = f"\n   → {candidate['reason']}" if candidate.get("reason") else ""   # 재순위를 쓰지 않으면 근거가 없다
         lines.append(f"{index}. [{candidate['company']}] {candidate['title']} "
                      f"(id={candidate['id']}, 유사도 {format_similarity_for_display(candidate.get('similarity'))})\n"
-                     f"   {meta}\n   → {candidate['reason']}" + (f"\n   {candidate['url']}" if candidate.get("url") else ""))
+                     f"   {meta}{reason_line}" + (f"\n   {candidate['url']}" if candidate.get("url") else ""))
     return "\n".join(lines)
+
+
+def get_pick_count(plan: JobSearchPlan) -> int:
+    """요청한 추천 개수. 말하지 않으면 기본값, 너무 많이 요청하면 상한으로 맞춘다."""
+    return min(max(plan.result_count or DEFAULT_RESULT_COUNT, 1), MAX_RESULT_COUNT)
+
+
+def build_no_results_update(plan: JobSearchPlan) -> dict:
+    """검색 결과가 없을 때 돌려줄 상태 값."""
+    return {"candidates": [], "answer": f"현재 조건에 맞는 공고가 없습니다. (검색 조건: {plan.model_dump(exclude_none=True)})"}
 
 
 def make_graph(tools: dict):
@@ -108,15 +122,30 @@ def make_graph(tools: dict):
             log.info("event=retrieve_row rank=%d %s", rank, format_search_row_for_log(row))
         return {"results": results}
 
+    async def fill_answer(state: JobSearchState) -> JobSearchState:
+        """LLM 재순위 없이 검색 결과 상위 N건을 그대로 후보로 쓴다 (검색 도구가 이미 유사도·마감순으로 정렬해 준다)."""
+        if not state["results"]:
+            log.warning("event=fill_answer_skipped reason=empty_search_results")
+            return build_no_results_update(state["plan"])
+
+        # 요청한 개수만큼 앞에서부터 자른다. 재순위가 없어서 reason은 채우지 않는다
+        pick_count = get_pick_count(state["plan"])
+        candidates = state["results"][:pick_count]
+        log.info("event=fill_answer_done input_candidates=%d pick_count=%d picked_ids=%s",
+                 len(state["results"]), pick_count, [candidate["id"] for candidate in candidates])
+
+        return {"candidates": candidates,
+                "answer": "검색된 공고:\n" + format_candidates(candidates)
+                          + "\n\n번호로 골라 기업분석이나 내 역량 비교를 요청할 수 있습니다."}
+
     async def rerank_explain(state: JobSearchState) -> JobSearchState:
         if not state["results"]:
             log.warning("event=rerank_skipped reason=empty_search_results")
-            cond = state["plan"].model_dump(exclude_none=True)
-            return {"candidates": [], "answer": f"현재 조건에 맞는 공고가 없습니다. (검색 조건: {cond})"}
+            return build_no_results_update(state["plan"])
 
         # 후보 중 요청한 개수(기본 5건, 최대 10건)를 LLM이 고르고, 검색 결과에 없는 id는 버린다
         plan = state["plan"]
-        pick_count = min(max(plan.result_count or DEFAULT_RESULT_COUNT, 1), MAX_RESULT_COUNT)
+        pick_count = get_pick_count(plan)
 
         deadline_order_rule = (
             "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고, 앞에서부터 요청(자격요건 등 조건이 "
@@ -146,13 +175,15 @@ def make_graph(tools: dict):
                 "answer": "추천 공고:\n" + format_candidates(candidates)
                           + "\n\n번호로 골라 기업분석이나 내 역량 비교를 요청할 수 있습니다."}
 
+    # retrieve 다음에 실행할 노드: 재순위를 쓰면 rerank_explain, 아니면 fill_answer
+    final_node_name, final_node = ("rerank_explain", rerank_explain) if USE_RERANK else ("fill_answer", fill_answer)
+
     graph = StateGraph(JobSearchState)
     graph.add_node("plan", plan)
     graph.add_node("retrieve", retrieve)
-    graph.add_node("rerank_explain", rerank_explain)
+    graph.add_node(final_node_name, final_node)
     graph.add_edge(START, "plan")
     graph.add_edge("plan", "retrieve")
-    # graph.add_edge("retrieve", "rerank_explain")
-    # graph.add_edge("rerank_explain", END)
-    graph.add_edge("retrieve", END)
+    graph.add_edge("retrieve", final_node_name)
+    graph.add_edge(final_node_name, END)
     return graph.compile()

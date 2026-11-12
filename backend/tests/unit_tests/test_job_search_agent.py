@@ -1,9 +1,29 @@
 """채용공고 조회 Agent(agents/graphs/job_search_graph.py) 단위 테스트."""
+import pytest
+
 from agents.graphs import job_search_graph
 from agents.state import JobSearchPlan, Pick, Ranking
 
 
-async def test_추천은_ranking_순서이고_검색결과에_없는_id는_버린다(fake_llm, make_tools, make_posting):
+@pytest.fixture
+def with_rerank(monkeypatch):
+    """LLM 재순위(rerank_explain)를 켠다. 기본은 꺼져 있다(USE_RERANK=False)."""
+    monkeypatch.setattr(job_search_graph, "USE_RERANK", True)
+
+
+async def test_재순위를_쓰지_않으면_검색_결과_앞에서부터_요청한_개수만큼_llm_호출_없이_돌려준다(fake_llm, make_tools, make_posting):
+    results = [make_posting(id=i, title=f"공고{i}") for i in range(1, 9)]
+    fake_llm.set(JobSearchPlan, JobSearchPlan(title_keywords=["LLM"]))
+
+    out = await job_search_graph.make_graph(make_tools(semantic_search_jobs=results)).ainvoke({"question": "LLM 공고"})
+
+    assert [c["id"] for c in out["candidates"]] == [1, 2, 3, 4, 5]   # 검색 순서 그대로, 기본 5건
+    assert "reason" not in out["candidates"][0]
+    assert "1. [SK] 공고1" in out["answer"] and "→" not in out["answer"]   # 근거 줄이 없다
+    assert fake_llm.prompts[Ranking] == []   # 재순위 LLM은 부르지 않는다
+
+
+async def test_추천은_ranking_순서이고_검색결과에_없는_id는_버린다(fake_llm, make_tools, make_posting, with_rerank):
     results = [make_posting(id=i, title=f"공고{i}") for i in (1, 2, 3)]
     tools = make_tools(semantic_search_jobs=results)
     fake_llm.set(JobSearchPlan, JobSearchPlan(title_keywords=["LLM"], q_responsibilities="LLM 에이전트 개발",
@@ -33,7 +53,7 @@ async def test_검색결과가_없으면_rerank를_부르지_않는다(fake_llm,
     assert fake_llm.prompts[Ranking] == []
 
 
-async def test_프로필이_있으면_planner_프롬프트에_들어간다(fake_llm, make_tools, make_posting):
+async def test_프로필이_있으면_planner_프롬프트에_들어간다(fake_llm, make_tools, make_posting, with_rerank):
     tools = make_tools(semantic_search_jobs=[make_posting()])
     fake_llm.set(JobSearchPlan, JobSearchPlan(q_required="FastAPI 백엔드 개발 경험"))
     fake_llm.set(Ranking, Ranking(picks=[]))
@@ -55,7 +75,7 @@ async def test_의미검색_질의가_없으면_유사도_대신_대시로_표�
     assert "(id=7, 유사도 -)" in out["answer"]
 
 
-async def test_마감_임박_요청은_마감순_검색_조건을_넘기고_개수는_요청대로_추천한다(fake_llm, make_tools, make_posting):
+async def test_마감_임박_요청은_마감순_검색_조건을_넘기고_개수는_요청대로_추천한다(fake_llm, make_tools, make_posting, with_rerank):
     results = [make_posting(id=i, title=f"공고{i}", deadline=f"2026-11-{10 + i:02d}") for i in range(1, 13)]
     tools = make_tools(semantic_search_jobs=results)
     fake_llm.set(JobSearchPlan, JobSearchPlan(category="AI Engineer", sort_by_deadline=True, result_count=10))
@@ -84,7 +104,7 @@ async def test_개수를_말하지_않으면_5건까지_추천하고_상한은_1
         assert len(out["candidates"]) == expected_count
 
 
-async def test_재순위_프롬프트는_후보가_이미_걸러졌음을_알리고_빈_목록을_막는다(fake_llm, make_tools, make_posting):
+async def test_재순위_프롬프트는_후보가_이미_걸러졌음을_알리고_빈_목록을_막는다(fake_llm, make_tools, make_posting, with_rerank):
     # 마감 같은 조건을 후보에서 확인할 수 없다고 LLM이 판단해 빈 목록을 내던 문제(CHANGELOG #37)의 회귀 방지
     tools = make_tools(semantic_search_jobs=[make_posting(id=1, deadline="2026-11-13")])
     fake_llm.set(JobSearchPlan, JobSearchPlan(category="AI Engineer", sort_by_deadline=True))

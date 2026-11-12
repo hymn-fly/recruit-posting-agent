@@ -30,7 +30,7 @@ make-agents/
 | 파일 | 역할 |
 |---|---|
 | `supervisor.py` | **Supervisor**. 라우터 LLM이 다음 Agent를 고르고, "2번 공고"를 추천 목록에서 찾아 선택. 한 턴 최대 3개 Agent, Agent별 MCP 도구 제한 |
-| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(직무명 → 제목 키워드 필터, 하는 일/필수/우대 → 컬럼별 의미 검색 질의) → `retrieve`(`semantic_search_jobs` 상위 20건, 마감 임박 요청이면 마감순. 자격요건 등 질의가 같이 있으면 유사도로 고른 뒤 마감순) → `rerank_explain`(LLM이 요청한 개수만큼 선택·근거, 기본 5건·최대 10건) |
+| `job_search_graph.py` | **채용공고 조회 Agent**. `plan`(직무명 → 제목 키워드 필터, 하는 일/필수/우대 → 컬럼별 의미 검색 질의) → `retrieve`(`semantic_search_jobs` 상위 20건, 마감 임박 요청이면 마감순. 자격요건 등 질의가 같이 있으면 유사도로 고른 뒤 마감순) → `fill_answer`(검색 결과 상위 N건을 그대로 사용, 기본 5건·최대 10건. `USE_RERANK = True`로 바꾸면 `rerank_explain`이 LLM으로 요청한 개수만큼 고르고 근거를 붙임) |
 | `company_research_graph.py` | **기업분석 Agent**. `plan_queries`(실제 계열사·산업·경쟁사, 토픽별 검색어) → `load_cache`(14일) → `search_topic`×N(Tavily 병렬) → `synthesize`(리포트·출처) |
 | `profile_gap_graph.py` | **내 프로필 Agent**. `load` → `decompose`(요구사항 분해) → `match`(요구사항별 이력서 근거 검색·판정) → `synthesize`(강점/부족한 점/보완 방법) |
 
