@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 TOP_K = 20
 USE_RERANK = False   # True: retrieve 뒤에 LLM 재순위(rerank_explain). False: 검색 결과 상위 N건을 그대로 쓴다(fill_answer)
 DEFAULT_RESULT_COUNT = 5   # 사용자가 개수를 말하지 않았을 때 추천할 공고 수
-MAX_RESULT_COUNT = 10      # 사용자가 더 많이 원해도 추천하는 최대 공고 수
+MAX_RESULT_COUNT = 20      # 사용자가 더 많이 원해도 추천하는 최대 공고 수
 BRIEF_LEN = 400   # rerank 프롬프트에 넣는 필드별 최대 글자 수
 SIMILARITY_LOG_KEYS = ("similarity", "sim_responsibilities", "sim_required", "sim_preferred")
 
