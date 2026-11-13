@@ -44,7 +44,7 @@ def app(make_tools, make_posting):
     config = {"configurable": {"thread_id": "t"}}
 
     async def turn(text):
-        out = await graph.ainvoke(supervisor.turn_input(text), config)
+        out = await graph.ainvoke(supervisor.input_to_agent_state(text), config)
         return out
     return SimpleNamespace(graph=graph, tools=tools, turn=turn)
 

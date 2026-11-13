@@ -66,7 +66,7 @@ async def test_supervisor_한_턴():
     require_env("GOOGLE_API_KEY", "OPENAI_API_KEY")
     async with open_tools() as tools:
         graph = supervisor.make_graph(tools, checkpointer=MemorySaver())
-        out = await graph.ainvoke(supervisor.turn_input("MLOps 모델 서빙 공고 찾아줘"),
+        out = await graph.ainvoke(supervisor.input_to_agent_state("MLOps 모델 서빙 공고 찾아줘"),
                                   {"configurable": {"thread_id": "it"}})
     print("\n" + out["messages"][-1].content)
     assert out.get("candidates"), out["messages"][-1].content

@@ -184,6 +184,6 @@ def make_graph(tools: dict, checkpointer=None):
     return graph.compile(checkpointer=checkpointer)
 
 
-def turn_input(text: str) -> AppState:
+def input_to_agent_state(text: str) -> AppState:
     """한 턴의 입력. 턴 단위 값(steps, turn_outputs)은 여기서 초기화한다."""
     return {"messages": [HumanMessage(content=text)], "steps": 0, "turn_outputs": []}

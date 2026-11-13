@@ -13,7 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 
 from common.observability import configure_logging, request_id
-from agents.graphs.supervisor import make_graph, turn_input
+from agents.graphs.supervisor import make_graph, input_to_agent_state
 from agents.mcp_client import open_tools
 from mcp_server import db
 from scripts.ingest_profile import extract_text, ingest, summarize
@@ -114,7 +114,7 @@ async def chat(sid: str, body: Message):
     async with sessions[sid]:
         log.info("event=chat_start session=%s lock_wait_seconds=%.2f", sid, time.perf_counter() - started)
         try:
-            await app.state.graph.ainvoke(turn_input(body.text), cfg)
+            await app.state.graph.ainvoke(input_to_agent_state(body.text), cfg)
             result = await snapshot(sid)
             log.info("event=chat_done session=%s candidates=%d messages=%d selected_posting_id=%s elapsed_seconds=%.2f",
                      sid, len(result["candidates"]), len(result["messages"]),
