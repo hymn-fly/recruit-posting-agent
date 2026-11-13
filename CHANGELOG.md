@@ -460,6 +460,16 @@
 - **검증**: `npx tsc --noEmit` 통과. `npm run lint`의 에러 2건(효과 안의 `setLoading(true)`, `<a href="/?view=documents">`)은 수정 전 `HEAD`에서도 같은 2건이 나와서 이번 변경과 무관하다. 코드 분석으로 원인을 찾았고 브라우저에서 직접 재현하거나 확인하지는 못했다.
 - **알아둘 점**: 새 메시지가 오면 채팅 박스 안만 맨 아래로 내려가고, 채팅 카드가 화면 밖에 있으면 페이지는 따라 내려가지 않는다.
 
+### #46 DB를 Neon 미국(us-east-2)에서 싱가포르(ap-southeast-1)로 이전
+- **무엇을**: Neon의 `recruit-post-db`(us-east-2)를 `recruit-post-db2`(ap-southeast-1)로 옮겼다. `pg_dump`(custom 형식)로 원본을 덤프해 `pg_restore --single-transaction`으로 대상에 복원했다. 둘 다 풀러(`-pooler`) 주소를 쓰고 있어서, 덤프·복원에는 호스트에서 `-pooler`만 뺀 직접 연결 주소를 메모리에서 만들어 썼다. `.env`의 `NEON_DATABASE_URL`은 새 DB를 가리키고, 원본 주소는 `NEON_DATABASE_URL_OLD`로 남겨 뒀다(코드는 읽지 않는다).
+  - 제외: Neon이 만든 샘플 테이블 `playing_with_neon`(코드에서 참조하지 않음)과 그 시퀀스.
+  - 복원 대상: `companies` 268, `job_postings` 447, `filtered_postings` 750, `scrape_runs` 572, `company_research` 7행과 `profile_*` 3개 테이블(0행). 인덱스 25개, 제약 조건 64개 포함.
+- **왜**: 앱 서버는 한국에서 도는데 DB가 미국 동부에 있어 쿼리 하나마다 왕복 약 0.5초가 들었다("공고 확인" 약 1초, 공고 목록 약 1초). DB를 가까운 지역으로 옮겨 왕복을 줄이려고.
+- **변경**: 코드 변경 없음. `.env`(커밋 대상 아님)만 변경.
+- **검증**: 테이블 8개 모두 행 수와 내용 해시(각 행을 텍스트로 바꿔 정렬·`md5`, 임베딩 `vector` 컬럼 포함)가 원본과 일치했다. 인덱스·제약 조건·시퀀스 값도 일치했다. 새 DB로 `semantic_search_jobs`(의미 검색)와 `get_job_posting`을 실제로 호출해 정상 동작했다. 이전 후 덤프 이후 원본에 새로 쓰인 데이터가 없는 것도 행 수와 최근 `scrape_runs` 시각으로 확인했다.
+- **효과**: `SELECT 1` 왕복 약 490ms → 82~171ms. "공고 확인"의 DB 쿼리 2개(순차) 약 1000ms → 약 350ms.
+- **주의**: pgvector가 원본 0.8.6, 대상 0.8.7로 패치 버전만 다르다(Neon이 새 인스턴스에 최신 패치를 설치함, 데이터 형식 영향 없음). 원본 DB는 읽기만 했고 그대로 남아 있어 롤백용으로 쓸 수 있다. 예약 작업의 `collect_server.py`도 같은 `.env`를 읽으므로 새 DB에 쓴다. 아직 실행 중인 서버는 재시작해야 새 주소를 쓴다.
+
 ---
 
 ## 미해결 / 다음 후보
