@@ -8,6 +8,7 @@ import {
   type FormEvent,
 } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   Button,
   Card,
@@ -56,6 +57,7 @@ type Session = {
 };
 type Doc = { id: number; filename: string; kind: string; updated_at: string };
 type Run = { source: string; status: string; detail: string; run_at: string };
+
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, options);
   if (!response.ok) {
@@ -73,12 +75,15 @@ const json = (value: unknown): RequestInit => ({
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(value),
 });
+
 const kinds: Record<string, string> = {
   resume: "이력서",
   portfolio: "포트폴리오",
   career: "경력기술서",
   other: "기타",
 };
+const JOBS_PAGE_SIZE = 10;
+
 function Report({ text, empty }: { text: string; empty: string }) {
   return text ? (
     <div className="report">
@@ -92,10 +97,26 @@ function Report({ text, empty }: { text: string; empty: string }) {
   );
 }
 
+function JobDetail({ text }: { text?: string }) {
+  const items = (text || "")
+    .split(/[;；\r\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!items.length) return <p className="t-small">공고에 기재된 내용이 없습니다.</p>;
+  return (
+    <ul className="list-disc space-y-1 pl-5 t-small">
+      {items.map((item, index) => (
+        <li key={`${index}-${item}`}>{item}</li>
+      ))}
+    </ul>
+  );
+}
+
 export function Workspace() {
   const params = useSearchParams();
   const view = params.get("view") || "jobs";
   const [session, setSession] = useState<Session | null>(null);
+  const [candidatePage, setCandidatePage] = useState(0);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [favorites, setFavorites] = useState<Job[]>([]);
   const [favoritesLoading, setFavoritesLoading] = useState(true);
@@ -158,9 +179,11 @@ export function Workspace() {
   }, [view]);
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    queueMicrotask(() => {
+      if (!cancelled) setLoading(true);
+    });
     api<{ items: Job[]; total: number }>(
-      `/jobs?q=${encodeURIComponent(filter)}&active=${active}&offset=${offset}`,
+      `/jobs?q=${encodeURIComponent(filter)}&active=${active}&offset=${offset}&limit=${JOBS_PAGE_SIZE}`,
     )
       .then((r) => {
         if (!cancelled) {
@@ -211,6 +234,12 @@ export function Workspace() {
         `/sessions/${session.session_id}/messages`,
         json({ text: clean }),
       );
+      if (
+        r.candidates.length !== session.candidates.length ||
+        r.candidates.some((job, index) => job.id !== session.candidates[index]?.id)
+      ) {
+        setCandidatePage(0);
+      }
       setSession(r);
       if (r.research_report !== session.research_report) setTab("research");
       else if (r.gap_report !== session.gap_report) setTab("gap");
@@ -286,6 +315,11 @@ export function Workspace() {
   };
   const heading = titles[view] || titles.jobs;
   const candidateList = session?.candidates || [];
+  const candidatePages = Math.ceil(candidateList.length / JOBS_PAGE_SIZE);
+  const visibleCandidates = candidateList.slice(
+    candidatePage * JOBS_PAGE_SIZE,
+    (candidatePage + 1) * JOBS_PAGE_SIZE,
+  );
   const jobCards = (items: Job[]) =>
     items.map((job) => {
       const isFavorite = favorites.some((item) => item.id === job.id);
@@ -355,6 +389,7 @@ export function Workspace() {
                 void action("새 대화를 준비합니다", async () => {
                   const s = await api<Session>("/sessions", { method: "POST" });
                   setSession(s);
+                  setCandidatePage(0);
                   localStorage.setItem("career-session", s.session_id);
                   setTab("detail");
                 })
@@ -372,7 +407,7 @@ export function Workspace() {
             {error}
           </div>
         )}
-        {notice && (
+        {view === "documents" && notice && (
           <div role="status" className="rounded-card bg-primary-soft p-4">
             {notice}
           </div>
@@ -593,19 +628,19 @@ export function Workspace() {
                       size="sm"
                       variant="outline"
                       isDisabled={offset === 0}
-                      onPress={() => setOffset(Math.max(0, offset - 30))}
+                      onPress={() => setOffset(Math.max(0, offset - JOBS_PAGE_SIZE))}
                     >
                       이전
                     </Button>
                     <span className="t-caption">
-                      {Math.floor(offset / 30) + 1} /{" "}
-                      {Math.max(1, Math.ceil(total / 30))}
+                      {Math.floor(offset / JOBS_PAGE_SIZE) + 1} /{" "}
+                      {Math.max(1, Math.ceil(total / JOBS_PAGE_SIZE))}
                     </span>
                     <Button
                       size="sm"
                       variant="outline"
-                      isDisabled={offset + 30 >= total}
-                      onPress={() => setOffset(offset + 30)}
+                      isDisabled={offset + JOBS_PAGE_SIZE >= total}
+                      onPress={() => setOffset(offset + JOBS_PAGE_SIZE)}
                     >
                       다음
                     </Button>
@@ -680,7 +715,30 @@ export function Workspace() {
                   <h2 className="t-section-title">
                     에이전트가 찾은 공고 · {candidateList.length}
                   </h2>
-                  <div className="grid gap-3">{jobCards(candidateList)}</div>
+                  <div className="grid gap-3">{jobCards(visibleCandidates)}</div>
+                  {candidatePages > 1 && (
+                    <div className="flex items-center justify-between">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        isDisabled={candidatePage === 0}
+                        onPress={() => setCandidatePage((page) => page - 1)}
+                      >
+                        이전
+                      </Button>
+                      <span className="t-caption">
+                        {candidatePage + 1} / {candidatePages}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        isDisabled={candidatePage + 1 >= candidatePages}
+                        onPress={() => setCandidatePage((page) => page + 1)}
+                      >
+                        다음
+                      </Button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -739,9 +797,7 @@ export function Workspace() {
                         ].map(([h, t]) => (
                           <section key={h}>
                             <h3 className="mb-2 t-card-title">{h}</h3>
-                            <p className="whitespace-pre-wrap t-small">
-                              {t || "공고에 기재된 내용이 없습니다."}
-                            </p>
+                            <JobDetail text={t} />
                           </section>
                         ))}
                         {selected.url && /^https?:\/\//.test(selected.url) && (
@@ -794,12 +850,12 @@ export function Workspace() {
                         </Button>
                         {!docs.length && (
                           <p className="mt-3 t-small">
-                            <a
+                            <Link
                               href="/?view=documents"
                               className="text-primary underline"
                             >
                               이력서·포트폴리오 추가하기
-                            </a>
+                            </Link>
                           </p>
                         )}
                         <Report
