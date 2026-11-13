@@ -25,7 +25,8 @@ class FakeGraph:
 def agents(monkeypatch):
     fakes = SimpleNamespace(
         job=FakeGraph({"answer": "추천 공고 목록", "candidates": [
-            {"id": 146, "company": "SK", "title": "A", "url": None},
+            {"id": 146, "company": "SK", "title": "A", "url": None,
+             "industry": "바이오", "location": "서울", "min_years": 8, "deadline": "2026-11-13"},
             {"id": 149, "company": "SK", "title": "B", "url": None}]}),
         research=FakeGraph({"report": "리서치 리포트", "answer": "리서치 리포트"}),
         gap=FakeGraph({"answer": "갭 리포트"}))
@@ -65,6 +66,8 @@ async def test_공고검색_후_FINISH하고_추천목록을_state에_남긴다(
 
     assert agents.job.inputs[0]["question"] == "LLM 공고 찾아줘"
     assert [c["id"] for c in out["candidates"]] == [146, 149]
+    assert {k: out["candidates"][0][k] for k in ("industry", "location", "min_years", "deadline")} == {
+        "industry": "바이오", "location": "서울", "min_years": 8, "deadline": "2026-11-13"}
     assert out["messages"][-1].content == "추천 공고 목록"
 
 
@@ -83,6 +86,21 @@ async def test_번호로_공고를_골라_기업분석_후_갭분석까지_이�
     assert gap_in["posting"]["id"] == 149 and gap_in["research_report"] == "리서치 리포트"
     text = out["messages"][-1].content
     assert "# 기업분석" in text and "# 내 프로필" in text   # 여러 Agent 결과를 묶어서 답함
+
+
+async def test_공고별_역량분석_결과를_세션에_보관한다(fake_llm, agents, app):
+    fake_llm.set(Route, [
+        Route(next="profile_gap", posting_id=146, reason="첫 공고 분석"),
+        Route(next="FINISH", reason="끝"),
+        Route(next="profile_gap", posting_id=149, reason="다른 공고 분석"),
+        Route(next="FINISH", reason="끝"),
+    ])
+
+    await app.turn("146번 공고 분석해줘")
+    agents.gap.result = {"answer": "두 번째 공고 분석"}
+    out = await app.turn("149번 공고 분석해줘")
+
+    assert out["gap_reports"] == {"146": "갭 리포트", "149": "두 번째 공고 분석"}
 
 
 async def test_공고가_선택되지_않았으면_되묻는다(fake_llm, agents, app):

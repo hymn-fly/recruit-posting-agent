@@ -122,7 +122,10 @@ def make_graph(tools: dict, checkpointer=None):
         upd: AppState = {"steps": state.get("steps", 0) + 1,
                          "turn_outputs": _output(state, "job_search", res["answer"])}
         if res.get("candidates"):
-            upd["candidates"] = [{k: c.get(k) for k in ("id", "company", "title", "url")} for c in res["candidates"]]
+            upd["candidates"] = [
+                {k: c.get(k) for k in ("id", "company", "title", "url", "industry", "location", "min_years", "deadline")}
+                for c in res["candidates"]
+            ]
         return upd
 
     async def run_company_research(state: AppState) -> AppState:
@@ -150,8 +153,12 @@ def make_graph(tools: dict, checkpointer=None):
             log.exception("event=profile_gap_failed")
             return {"steps": state.get("steps", 0) + 1,
                     "turn_outputs": _output(state, "profile_gap", f"⚠️ 내 프로필 분석 실패: {error!r}"[:300])}
+        reports = dict(state.get("gap_reports") or {})
+        if state.get("gap_report") and state.get("gap_posting_id") is not None:
+            reports[str(state["gap_posting_id"])] = state["gap_report"]
+        reports[str(posting["id"])] = res["answer"]
         return {"steps": state.get("steps", 0) + 1, "gap_report": res["answer"],
-                "gap_posting_id": posting["id"],
+                "gap_posting_id": posting["id"], "gap_reports": reports,
                 "turn_outputs": _output(state, "profile_gap", res["answer"])}
 
     async def finish(state: AppState) -> AppState:

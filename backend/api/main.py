@@ -79,11 +79,15 @@ async def snapshot(sid):
     state = (await app.state.graph.aget_state(config(sid))).values
     posting = state.get("selected_posting")
     same = posting and state.get("research_posting_id") == posting["id"]
+    gap_report = ""
+    if posting:
+        gap_report = (state.get("gap_report", "") if state.get("gap_posting_id") == posting["id"]
+                      else (state.get("gap_reports") or {}).get(str(posting["id"]), ""))
     return jsonable_encoder({
         "session_id": sid, "candidates": state.get("candidates", []),
         "selected_posting": posting,
         "research_report": state.get("research_report", "") if same else "",
-        "gap_report": state.get("gap_report", "") if posting and state.get("gap_posting_id") == posting["id"] else "",
+        "gap_report": gap_report,
         "messages": [{"role": "user" if m.type == "human" else "assistant", "content": m.content}
                      for m in state.get("messages", []) if m.type in ("human", "ai")],
     })
@@ -115,6 +119,7 @@ async def chat(sid: str, body: Message):
         log.info("event=chat_start session=%s lock_wait_seconds=%.2f", sid, time.perf_counter() - started)
         try:
             await app.state.graph.ainvoke(input_to_agent_state(body.text), cfg)
+            await save_gap_report_of_session(sid)
             result = await snapshot(sid)
             log.info("event=chat_done session=%s candidates=%d messages=%d selected_posting_id=%s elapsed_seconds=%.2f",
                      sid, len(result["candidates"]), len(result["messages"]),
@@ -126,6 +131,21 @@ async def chat(sid: str, body: Message):
         except Exception:
             log.exception("event=chat_failed session=%s elapsed_seconds=%.2f", sid, time.perf_counter() - started)
             raise
+
+
+async def save_gap_report_of_session(sid: str) -> None:
+    """세션에 방금 만들어진 역량 분석을 공고 id 기준으로 DB에 저장(공고당 최신 1건)."""
+    state = (await app.state.graph.aget_state(config(sid))).values
+    posting_id, report = state.get("gap_posting_id"), state.get("gap_report")
+    if posting_id is None or not report:
+        return
+
+    connection_pool = await db.pool()
+    await connection_pool.execute(
+        "INSERT INTO posting_gap_reports (posting_id, report_md) VALUES ($1, $2) "
+        "ON CONFLICT (posting_id) DO UPDATE SET report_md=EXCLUDED.report_md, updated_at=now() "
+        "WHERE posting_gap_reports.report_md IS DISTINCT FROM EXCLUDED.report_md",
+        posting_id, report)
 
 
 @app.post("/sessions/{sid}/select/{posting_id}")
@@ -140,20 +160,28 @@ async def select_posting(sid: str, posting_id: int):
         old = state.get("selected_posting") or {}
         update = {"selected_posting": jsonable_encoder(dict(row))}
         if old.get("id") != posting_id:
-            update.update(research_report="", research_posting_id=None, gap_report="")
+            update.update(research_report="", research_posting_id=None)
             cached = await pool.fetchval("SELECT report_md FROM company_research WHERE posting_id=$1 ORDER BY created_at DESC LIMIT 1", posting_id)
             if cached:
                 update.update(research_report=cached, research_posting_id=posting_id)
+        # 세션 메모리에 없는 공고의 역량 분석은 DB에 저장된 것을 불러온다
+        gap_reports = dict(state.get("gap_reports") or {})
+        in_memory = state.get("gap_posting_id") == posting_id or str(posting_id) in gap_reports
+        if not in_memory:
+            saved_gap_report = await pool.fetchval("SELECT report_md FROM posting_gap_reports WHERE posting_id=$1", posting_id)
+            if saved_gap_report:
+                update["gap_reports"] = {**gap_reports, str(posting_id): saved_gap_report}
         await app.state.graph.aupdate_state(cfg, update)
         return await snapshot(sid)
 
 
 @app.get("/jobs")
-async def jobs(search_text: str = Query("", alias="q"), active: bool = True, offset: int = 0):   # URL은 ?q= 그대로
+async def jobs(search_text: str = Query("", alias="q"), active: bool = True,
+               offset: int = Query(0, ge=0), limit: int = Query(10, ge=1, le=100)):
     pool = await db.pool()
     condition = "($1='' OR j.title ILIKE '%'||$1||'%' OR c.name ILIKE '%'||$1||'%') AND (NOT $2 OR (j.is_active AND (j.deadline IS NULL OR j.deadline >= (now() AT TIME ZONE 'Asia/Seoul')::date)))"
     total = await pool.fetchval(f"SELECT count(*) FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE {condition}", search_text, active)
-    rows = await pool.fetch(f"SELECT j.id,j.title,j.location,j.category,j.deadline,j.min_years,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE {condition} ORDER BY j.first_seen_at DESC,j.id DESC LIMIT 30 OFFSET $3", search_text, active, max(offset, 0))
+    rows = await pool.fetch(f"SELECT j.id,j.title,j.location,j.category,j.deadline,j.min_years,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE {condition} ORDER BY j.first_seen_at DESC,j.id DESC LIMIT $3 OFFSET $4", search_text, active, limit, offset)
     return jsonable_encoder({"items": [dict(r) for r in rows], "total": total})
 
 
@@ -190,6 +218,42 @@ async def remove_favorite(posting_id: int):
     connection_pool = await db.pool()
     await connection_pool.execute("DELETE FROM favorite_postings WHERE posting_id=$1", posting_id)
     return {"posting_id": posting_id}
+
+
+@app.get("/analyses")
+async def list_analyses():
+    """산업·기업조사나 역량 분석이 저장된 공고 목록 (최근 분석 순)."""
+    connection_pool = await db.pool()
+    rows = await connection_pool.fetch(
+        "SELECT j.id,j.title,c.name AS company,c.industry,"
+        "r.created_at AS research_saved_at,g.updated_at AS gap_saved_at "
+        "FROM job_postings j JOIN companies c ON c.id=j.company_id "
+        "LEFT JOIN LATERAL (SELECT created_at FROM company_research WHERE posting_id=j.id "
+        "                   ORDER BY created_at DESC LIMIT 1) r ON true "
+        "LEFT JOIN posting_gap_reports g ON g.posting_id=j.id "
+        "WHERE r.created_at IS NOT NULL OR g.posting_id IS NOT NULL "
+        "ORDER BY GREATEST(r.created_at, g.updated_at) DESC, j.id DESC"
+    )
+    return jsonable_encoder([dict(row) for row in rows])
+
+
+@app.get("/postings/{posting_id}/analysis")
+async def get_posting_analysis(posting_id: int):
+    """한 공고의 저장된 산업·기업조사와 역량 분석. 없는 쪽은 빈 문자열."""
+    connection_pool = await db.pool()
+    research = await connection_pool.fetchrow(
+        "SELECT report_md,created_at FROM company_research WHERE posting_id=$1 ORDER BY created_at DESC LIMIT 1", posting_id)
+    gap = await connection_pool.fetchrow(
+        "SELECT report_md,updated_at FROM posting_gap_reports WHERE posting_id=$1", posting_id)
+    if not research and not gap:
+        raise HTTPException(404, "저장된 분석이 없습니다.")
+    return jsonable_encoder({
+        "posting_id": posting_id,
+        "research_report": research["report_md"] if research else "",
+        "research_saved_at": research["created_at"] if research else None,
+        "gap_report": gap["report_md"] if gap else "",
+        "gap_saved_at": gap["updated_at"] if gap else None,
+    })
 
 
 @app.get("/collection")
@@ -232,8 +296,10 @@ async def upload(file: UploadFile = File(...), kind: str = Form(...)):
                 await summarize()
             except Exception as exc:
                 raise HTTPException(503, "문서는 저장됐지만 프로필 요약에 실패했습니다. 같은 파일을 다시 업로드해 주세요.") from exc
-    # 문서 변경 후 기존 역량 결과를 다시 보여주지 않는다.
+    # 문서 변경 후 기존 역량 결과를 다시 보여주지 않는다. 저장된 분석도 낡았으므로 함께 지운다.
+    connection_pool = await db.pool()
+    await connection_pool.execute("DELETE FROM posting_gap_reports")
     for sid, lock in list(sessions.items()):
         async with lock:
-            await app.state.graph.aupdate_state(config(sid), {"gap_report": ""})
+            await app.state.graph.aupdate_state(config(sid), {"gap_report": "", "gap_posting_id": None, "gap_reports": {}})
     return {"message": result}

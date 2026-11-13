@@ -476,6 +476,22 @@
 - **변경**: `backend/agents/graphs/job_search_graph.py`, `backend/tests/unit_tests/test_job_search_agent.py`
 - **검증**: 단위 테스트 `test_개수를_말하지_않으면_조회된_전체를_추천하고_말하면_그만큼만_추천한다`(미지정→전체 15, 3→3, 50→15).
 
+### #48 공고별 역량 분석을 DB에 저장하고 조회 API 추가 (`posting_gap_reports`)
+- **무엇을**: 역량 분석(`profile_gap`) 결과를 공고 id 기준 `posting_gap_reports`(공고당 최신 1건)에 저장한다. 산업·기업조사는 이미 `company_research.posting_id`로 저장되고 있어 그대로 쓴다.
+  - 저장: 채팅 턴이 끝나면 `save_gap_report_of_session`이 세션의 새 분석을 upsert(내용이 같으면 건너뜀).
+  - 불러오기: 세션 메모리에 없는 공고를 선택하면 DB에 저장된 분석을 보여준다(서버 재시작 후에도 유지).
+  - 조회: `GET /analyses`(분석이 저장된 공고 목록), `GET /postings/{id}/analysis`(산업·기업조사 + 역량 분석).
+  - 프로필 문서를 새로 올리면 낡은 분석이므로 저장된 역량 분석도 전부 삭제한다.
+- **왜**: 역량 분석이 세션 메모리에만 있어 서버를 재시작하거나 새 대화를 열면 사라졌다. 관심공고처럼 공고 기준으로 남겨 다시 볼 수 있게 하려고.
+- **변경**: `mcp_server/sql/schema.sql`, `mcp_server/sql/migrations/2026-11-13_posting_gap_reports.sql`, `backend/api/main.py`, `backend/tests/unit_tests/test_api_gap_reports.py`
+- **검증**: 단위 테스트(DB 분석 불러오기, upsert/빈 분석 건너뜀). 개인 프로필이 담겨 MCP 서버(조회 전용 profile-db, 외부 노출되는 job-db)에는 쓰기 도구를 넣지 않고 API가 DB에 직접 저장한다.
+
+### #49 화면 목록 10개 단위 페이지 나누기 + 공고 상세를 항목별 목록으로 표시
+- **무엇을**: 공고 목록(`/jobs`)을 한 페이지 10개(`limit`, 1~100)로 나누고, 에이전트 추천 후보도 10개씩 페이지로 보여준다. 공고 상세의 하는 일·자격요건은 `;`/줄바꿈 기준으로 나눠 글머리 목록으로 표시한다.
+- **왜**: 한 번에 30개씩 보여 주면 목록이 길어 찾기 어려웠고, 상세 텍스트가 한 덩어리라 읽기 힘들었다.
+- **변경**: `backend/api/main.py`(`/jobs`의 `limit`), `frontend/components/Workspace.tsx`
+- **검증**: 화면 동작 확인(자동 테스트 없음).
+
 ---
 
 ## 미해결 / 다음 후보

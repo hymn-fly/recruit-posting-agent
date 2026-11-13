@@ -141,6 +141,7 @@ class AppState(TypedDict, total=False):
     research_posting_id: int     # research_report가 어느 공고 기준인지
     gap_report: str
     gap_posting_id: int         # gap_report 분석 대상 공고
+    gap_reports: dict[str, str] # 공고 id별 역량 분석 결과 (세션 내 보관)
     route: dict                  # Route.model_dump()
     steps: int                   # 이번 턴에 실행한 Agent 수 (턴마다 0으로 초기화)
     turn_outputs: list[dict]     # 이번 턴 Agent 결과 [{agent, text}] (턴마다 초기화)
