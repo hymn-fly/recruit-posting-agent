@@ -99,7 +99,12 @@ function ProgressSteps({ steps }: { steps: ProgressStep[] }) {
           {step.status === "start" ? (
             <Spinner size="sm" />
           ) : (
-            <CheckCircle size={16} weight="fill" aria-hidden />
+            <CheckCircle
+              size={16}
+              weight="fill"
+              className="text-green-500"
+              aria-hidden
+            />
           )}
           <span className={step.status === "start" ? "" : "text-muted"}>
             {step.message}
