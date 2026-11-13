@@ -21,10 +21,11 @@ import {
 import {
   ArrowRight,
   ArrowUp,
-  Briefcase,
+  BriefcaseIcon,
   FileText,
   MagnifyingGlass,
   Plus,
+  Star,
   UploadSimple,
 } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
@@ -96,6 +97,9 @@ export function Workspace() {
   const view = params.get("view") || "jobs";
   const [session, setSession] = useState<Session | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [favorites, setFavorites] = useState<Job[]>([]);
+  const [favoritesLoading, setFavoritesLoading] = useState(true);
+  const [savingFavorite, setSavingFavorite] = useState<number | null>(null);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [query, setQuery] = useState("");
@@ -117,6 +121,10 @@ export function Workspace() {
   const selected = session?.selected_posting;
   const refreshDocs = useCallback(
     async () => setDocs(await api<Doc[]>("/documents")),
+    [],
+  );
+  const refreshFavorites = useCallback(
+    async () => setFavorites(await api<Job[]>("/favorites")),
     [],
   );
   useEffect(() => {
@@ -142,6 +150,12 @@ export function Workspace() {
     }
     void init();
   }, [refreshDocs]);
+  useEffect(() => {
+    void api<Job[]>("/favorites")
+      .then(setFavorites)
+      .catch((e) => setError(e.message))
+      .finally(() => setFavoritesLoading(false));
+  }, [view]);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -213,6 +227,22 @@ export function Workspace() {
       setTab("detail");
     });
   }
+  async function toggleFavorite(job: Job) {
+    if (savingFavorite !== null) return;
+    const isFavorite = favorites.some((item) => item.id === job.id);
+    setError("");
+    setSavingFavorite(job.id);
+    try {
+      await api<{ posting_id: number }>(`/favorites/${job.id}`, {
+        method: isFavorite ? "DELETE" : "PUT",
+      });
+      await refreshFavorites();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSavingFavorite(null);
+    }
+  }
   async function upload(e: FormEvent) {
     e.preventDefault();
     if (!file) return;
@@ -249,11 +279,17 @@ export function Workspace() {
       "수집 현황",
       "사이트별 최근 수집 결과와 확인이 필요한 기록을 살펴보세요.",
     ],
+    favorites: [
+      "관심공고",
+      "저장한 공고를 모아보고, 다시 열어 분석을 이어가세요.",
+    ],
   };
   const heading = titles[view] || titles.jobs;
   const candidateList = session?.candidates || [];
   const jobCards = (items: Job[]) =>
-    items.map((job) => (
+    items.map((job) => {
+      const isFavorite = favorites.some((item) => item.id === job.id);
+      return (
       <Card
         key={job.id}
         className={
@@ -272,22 +308,36 @@ export function Workspace() {
               ? `${job.min_years}년 이상`
               : "경력 조건 미기재"}
           </p>
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="t-caption">
               {job.deadline ? `${job.deadline} 마감` : "마감일 미기재"}
             </span>
-            <Button
-              variant={selected?.id === job.id ? "primary" : "outline"}
-              size="sm"
-              isDisabled={!!busy || !session}
-              onPress={() => void select(job)}
-            >
-              공고 확인 <ArrowRight />
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant={isFavorite ? "secondary" : "outline"}
+                size="sm"
+                aria-label={isFavorite ? `${job.title} 관심공고 해제` : `${job.title} 관심공고 등록`}
+                aria-pressed={isFavorite}
+                isDisabled={savingFavorite !== null}
+                onPress={() => void toggleFavorite(job)}
+              >
+                <Star weight={isFavorite ? "fill" : "regular"} />
+                {isFavorite ? "저장됨" : "관심 등록"}
+              </Button>
+              <Button
+                variant={selected?.id === job.id ? "primary" : "outline"}
+                size="sm"
+                isDisabled={!!busy || !session}
+                onPress={() => void select(job)}
+              >
+                공고 확인 <ArrowRight />
+              </Button>
+            </div>
           </div>
         </Card.Content>
       </Card>
-    ));
+    );
+    });
   return (
     <Shell
       appName="Career Workspace"
@@ -467,7 +517,23 @@ export function Workspace() {
         ) : (
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
             <div className="flex min-w-0 flex-col gap-6">
-              {view !== "chat" && (
+              {view === "favorites" && (
+                <>
+                  <h2 className="t-section-title">저장한 공고 · {favorites.length}</h2>
+                  {favoritesLoading ? (
+                    <Spinner />
+                  ) : favorites.length ? (
+                    <div className="grid gap-3">{jobCards(favorites)}</div>
+                  ) : (
+                    <Card>
+                      <Card.Content className="py-10 text-center text-muted">
+                        저장한 공고가 없습니다. 공고 탐색이나 에이전트 추천에서 관심 등록을 눌러 주세요.
+                      </Card.Content>
+                    </Card>
+                  )}
+                </>
+              )}
+              {view === "jobs" && (
                 <>
                   <Card>
                     <Card.Content>
@@ -546,7 +612,7 @@ export function Workspace() {
                   </div>
                 </>
               )}
-              <Card>
+              {view === "chat" && <Card>
                 <Card.Header>
                   <Card.Title>커리어 에이전트</Card.Title>
                   <Card.Description>
@@ -608,8 +674,8 @@ export function Workspace() {
                     </Button>
                   </form>
                 </Card.Content>
-              </Card>
-              {candidateList.length > 0 && (
+              </Card>}
+              {view === "chat" && candidateList.length > 0 && (
                 <>
                   <h2 className="t-section-title">
                     에이전트가 찾은 공고 · {candidateList.length}
@@ -621,7 +687,7 @@ export function Workspace() {
             <Card className="min-w-0 xl:sticky xl:top-20">
               <Card.Header>
                 <div className="flex items-center gap-2 text-primary">
-                  <Briefcase />
+                  <BriefcaseIcon />
                   <span className="t-small">선택한 공고</span>
                 </div>
                 <Card.Title>
@@ -745,7 +811,7 @@ export function Workspace() {
                   </>
                 ) : (
                   <div className="py-16 text-center text-muted">
-                    <Briefcase size={40} className="mx-auto mb-4" />
+                    <BriefcaseIcon size={40} className="mx-auto mb-4" />
                     <p>공고 상세 → 산업·기업 조사 → 내 역량 분석</p>
                     <p className="mt-2 t-small">
                       하나의 공고를 기준으로 준비를 이어가세요.

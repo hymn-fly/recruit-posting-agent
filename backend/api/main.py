@@ -157,6 +157,41 @@ async def jobs(search_text: str = Query("", alias="q"), active: bool = True, off
     return jsonable_encoder({"items": [dict(r) for r in rows], "total": total})
 
 
+@app.get("/favorites")
+async def favorites():
+    connection_pool = await db.pool()
+    rows = await connection_pool.fetch(
+        "SELECT j.id,j.title,j.url,j.location,j.deadline,j.min_years,j.is_active,"
+        "c.name AS company,c.industry,f.created_at AS saved_at "
+        "FROM favorite_postings f "
+        "JOIN job_postings j ON j.id=f.posting_id "
+        "JOIN companies c ON c.id=j.company_id "
+        "ORDER BY f.created_at DESC,j.id DESC"
+    )
+    return jsonable_encoder([dict(row) for row in rows])
+
+
+@app.put("/favorites/{posting_id}")
+async def add_favorite(posting_id: int):
+    connection_pool = await db.pool()
+    row = await connection_pool.fetchrow(
+        "INSERT INTO favorite_postings (posting_id) "
+        "SELECT id FROM job_postings WHERE id=$1 "
+        "ON CONFLICT (posting_id) DO UPDATE SET posting_id=EXCLUDED.posting_id "
+        "RETURNING posting_id", posting_id
+    )
+    if not row:
+        raise HTTPException(404, "공고를 찾지 못했습니다.")
+    return {"posting_id": row["posting_id"]}
+
+
+@app.delete("/favorites/{posting_id}")
+async def remove_favorite(posting_id: int):
+    connection_pool = await db.pool()
+    await connection_pool.execute("DELETE FROM favorite_postings WHERE posting_id=$1", posting_id)
+    return {"posting_id": posting_id}
+
+
 @app.get("/collection")
 async def collection():
     connection_pool = await db.pool()

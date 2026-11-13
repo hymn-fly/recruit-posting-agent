@@ -102,6 +102,14 @@ CREATE INDEX IF NOT EXISTS idx_job_postings_category ON job_postings(category);
 CREATE INDEX IF NOT EXISTS idx_job_postings_active   ON job_postings(is_active);
 CREATE INDEX IF NOT EXISTS idx_job_postings_company  ON job_postings(company_id);
 
+-- 개인 워크스페이스에서 저장한 관심공고. 대화 세션과 독립적으로 유지한다.
+CREATE TABLE IF NOT EXISTS favorite_postings (
+    posting_id INTEGER PRIMARY KEY REFERENCES job_postings(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_postings_created_at ON favorite_postings(created_at DESC);
+
+
 -- ---------------------------------------------------------------
 -- scrape_runs
 -- ---------------------------------------------------------------
