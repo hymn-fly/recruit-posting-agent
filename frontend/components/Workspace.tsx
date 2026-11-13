@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { streamServerSentEvents } from "@/lib/sse";
 import {
   Button,
   Card,
@@ -23,6 +24,7 @@ import {
   ArrowRight,
   ArrowUp,
   BriefcaseIcon,
+  CheckCircle,
   FileText,
   MagnifyingGlass,
   Plus,
@@ -55,6 +57,13 @@ type Session = {
   research_report: string;
   gap_report: string;
 };
+type ProgressStep = {
+  agent: string;
+  step: string;
+  status: "start" | "done";
+  message: string;
+};
+type StreamErrorEvent = { message?: string };
 type Doc = { id: number; filename: string; kind: string; updated_at: string };
 type Run = { source: string; status: string; detail: string; run_at: string };
 
@@ -70,6 +79,37 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return response.json();
 }
+// 같은 (agent, step)의 start/done은 한 줄로 합친다. 병렬 단계는 step 이름에 토픽이 붙어 있어 서로 구분된다.
+function mergeProgressStep(steps: ProgressStep[], incoming: ProgressStep): ProgressStep[] {
+  const existingIndex = steps.findIndex(
+    (step) => step.agent === incoming.agent && step.step === incoming.step,
+  );
+  if (existingIndex === -1) return [...steps, incoming];
+  return steps.map((step, index) => (index === existingIndex ? incoming : step));
+}
+
+function ProgressSteps({ steps }: { steps: ProgressStep[] }) {
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {steps.map((step) => (
+        <li
+          key={`${step.agent}:${step.step}`}
+          className="flex items-center gap-2 t-small"
+        >
+          {step.status === "start" ? (
+            <Spinner size="sm" />
+          ) : (
+            <CheckCircle size={16} weight="fill" aria-hidden />
+          )}
+          <span className={step.status === "start" ? "" : "text-muted"}>
+            {step.message}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 const json = (value: unknown): RequestInit => ({
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -131,6 +171,8 @@ export function Workspace() {
   const [draft, setDraft] = useState("");
   const [tab, setTab] = useState("detail");
   const [busy, setBusy] = useState("");
+  const [pendingQuestion, setPendingQuestion] = useState("");
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -212,7 +254,7 @@ export function Workspace() {
   useEffect(() => {
     const history = chatHistory.current;
     if (history) history.scrollTo({ top: history.scrollHeight, behavior: "smooth" });
-  }, [session?.messages.length]);
+  }, [session?.messages.length, progressSteps.length, pendingQuestion]);
   async function action(label: string, fn: () => Promise<void>) {
     setError("");
     setNotice("");
@@ -229,11 +271,40 @@ export function Workspace() {
     if (!session || !text.trim() || busy) return;
     const clean = text.trim();
     setDraft("");
+
+    // 응답이 오기 전에도 내 질문이 보이게 하고, 지난 요청의 진행 단계는 비운다
+    setPendingQuestion(clean);
+    setProgressSteps([]);
+
     await action("에이전트가 요청을 처리하고 있습니다", async () => {
-      const r = await api<Session>(
-        `/sessions/${session.session_id}/messages`,
-        json({ text: clean }),
-      );
+      const streamResult: { finalSession: Session | null } = { finalSession: null };
+
+      try {
+        // 서버가 보내는 단계(step)는 목록에 쌓고, 마지막 done 이벤트의 snapshot을 최종 상태로 쓴다
+        await streamServerSentEvents(
+          `/sessions/${session.session_id}/messages/stream`,
+          json({ text: clean }),
+          (event) => {
+            if (event.event === "step") {
+              setProgressSteps((steps) =>
+                mergeProgressStep(steps, event.data as ProgressStep),
+              );
+            } else if (event.event === "done") {
+              streamResult.finalSession = event.data as Session;
+            } else if (event.event === "error") {
+              throw new Error(
+                (event.data as StreamErrorEvent).message ||
+                  "요청을 처리하지 못했습니다.",
+              );
+            }
+          },
+        );
+      } finally {
+        setPendingQuestion("");
+      }
+
+      const r = streamResult.finalSession;
+      if (!r) throw new Error("응답이 중간에 끊겼습니다. 다시 시도해 주세요.");
       if (
         r.candidates.length !== session.candidates.length ||
         r.candidates.some((job, index) => job.id !== session.candidates[index]?.id)
@@ -680,6 +751,28 @@ export function Workspace() {
                         <Report text={m.content} empty="" />
                       </div>
                     ))}
+                    {pendingQuestion && (
+                      <div className="ml-6 rounded-card bg-primary-soft p-4">
+                        <p className="mb-2 t-caption">나</p>
+                        <p className="t-body whitespace-pre-wrap">{pendingQuestion}</p>
+                      </div>
+                    )}
+                    {/* 처리 중에는 펼쳐서 보여주고, 끝나면 접어서 남긴다 */}
+                    {progressSteps.length > 0 && (
+                      <details
+                        open={!!pendingQuestion}
+                        className="mr-2 rounded-card bg-muted p-4"
+                      >
+                        <summary className="cursor-pointer t-caption">
+                          {pendingQuestion
+                            ? "처리 중"
+                            : `처리 과정 · ${progressSteps.length}단계`}
+                        </summary>
+                        <div className="mt-3">
+                          <ProgressSteps steps={progressSteps} />
+                        </div>
+                      </details>
+                    )}
                   </div>
                   <form
                     onSubmit={(e) => {
