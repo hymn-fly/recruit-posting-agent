@@ -17,7 +17,7 @@ async def test_재순위를_쓰지_않으면_검색_결과_앞에서부터_요�
 
     out = await job_search_graph.make_graph(make_tools(semantic_search_jobs=results)).ainvoke({"question": "LLM 공고"})
 
-    assert [c["id"] for c in out["candidates"]] == [1, 2, 3, 4, 5]   # 검색 순서 그대로, 기본 5건
+    assert [c["id"] for c in out["candidates"]] == list(range(1, 9))   # 개수를 말하지 않아서 조회된 8건 전부, 검색 순서 그대로
     assert "reason" not in out["candidates"][0]
     assert "1. [SK] 공고1" in out["answer"] and "→" not in out["answer"]   # 근거 줄이 없다
     assert fake_llm.prompts[Ranking] == []   # 재순위 LLM은 부르지 않는다
@@ -93,11 +93,11 @@ async def test_마감_임박_요청은_마감순_검색_조건을_넘기고_개�
     assert '"deadline": "2026-11-11"' in prompt   # 재순위 프롬프트에 마감일이 들어간다
 
 
-async def test_개수를_말하지_않으면_5건까지_추천하고_상한은_10건이다(fake_llm, make_tools, make_posting):
+async def test_개수를_말하지_않으면_조회된_전체를_추천하고_말하면_그만큼만_추천한다(fake_llm, make_tools, make_posting):
     results = [make_posting(id=i, title=f"공고{i}") for i in range(1, 16)]
     fake_llm.set(Ranking, Ranking(picks=[Pick(id=i, reason="일치") for i in range(1, 16)]))
 
-    for requested, expected_count in ((None, 5), (3, 3), (50, 10)):
+    for requested, expected_count in ((None, 15), (3, 3), (50, 15)):
         fake_llm.set(JobSearchPlan, JobSearchPlan(title_keywords=["LLM"], result_count=requested))
         out = await job_search_graph.make_graph(make_tools(semantic_search_jobs=results)).ainvoke(
             {"question": "LLM 공고"})

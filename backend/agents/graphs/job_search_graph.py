@@ -20,8 +20,6 @@ log = logging.getLogger(__name__)
 
 TOP_K = 20
 USE_RERANK = False   # True: retrieve 뒤에 LLM 재순위(rerank_explain). False: 검색 결과 상위 N건을 그대로 쓴다(fill_answer)
-DEFAULT_RESULT_COUNT = 5   # 사용자가 개수를 말하지 않았을 때 추천할 공고 수
-MAX_RESULT_COUNT = 20      # 사용자가 더 많이 원해도 추천하는 최대 공고 수
 BRIEF_LEN = 400   # rerank 프롬프트에 넣는 필드별 최대 글자 수
 SIMILARITY_LOG_KEYS = ("similarity", "sim_responsibilities", "sim_required", "sim_preferred")
 
@@ -78,9 +76,11 @@ def format_candidates(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def get_pick_count(plan: JobSearchPlan) -> int:
-    """요청한 추천 개수. 말하지 않으면 기본값, 너무 많이 요청하면 상한으로 맞춘다."""
-    return min(max(plan.result_count or DEFAULT_RESULT_COUNT, 1), MAX_RESULT_COUNT)
+def get_pick_count(plan: JobSearchPlan, retrieved_count: int) -> int:
+    """추천 개수. 말하지 않았으면 조회된 결과 개수 그대로, 말했으면 조회된 결과 안에서 그만큼만."""
+    if not plan or not plan.result_count:
+        return retrieved_count
+    return min(max(plan.result_count, 1), retrieved_count)
 
 
 def build_no_results_update(plan: JobSearchPlan) -> dict:
@@ -129,7 +129,7 @@ def make_graph(tools: dict):
             return build_no_results_update(state["plan"])
 
         # 요청한 개수만큼 앞에서부터 자른다. 재순위가 없어서 reason은 채우지 않는다
-        pick_count = get_pick_count(state["plan"])
+        pick_count = get_pick_count(state["plan"], len(state["results"]))
         candidates = state["results"][:pick_count]
         log.info("event=fill_answer_done input_candidates=%d pick_count=%d picked_ids=%s",
                  len(state["results"]), pick_count, [candidate["id"] for candidate in candidates])
@@ -143,9 +143,9 @@ def make_graph(tools: dict):
             log.warning("event=rerank_skipped reason=empty_search_results")
             return build_no_results_update(state["plan"])
 
-        # 후보 중 요청한 개수(기본 5건, 최대 10건)를 LLM이 고르고, 검색 결과에 없는 id는 버린다
+        # 후보 중 요청한 개수(말하지 않았으면 조회된 전체)를 LLM이 고르고, 검색 결과에 없는 id는 버린다
         plan = state["plan"]
-        pick_count = get_pick_count(plan)
+        pick_count = get_pick_count(plan, len(state["results"]))
 
         deadline_order_rule = (
             "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고, 앞에서부터 요청(자격요건 등 조건이 "

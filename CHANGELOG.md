@@ -470,6 +470,12 @@
 - **효과**: `SELECT 1` 왕복 약 490ms → 82~171ms. "공고 확인"의 DB 쿼리 2개(순차) 약 1000ms → 약 350ms.
 - **주의**: pgvector가 원본 0.8.6, 대상 0.8.7로 패치 버전만 다르다(Neon이 새 인스턴스에 최신 패치를 설치함, 데이터 형식 영향 없음). 원본 DB는 읽기만 했고 그대로 남아 있어 롤백용으로 쓸 수 있다. 예약 작업의 `collect_server.py`도 같은 `.env`를 읽으므로 새 DB에 쓴다. 아직 실행 중인 서버는 재시작해야 새 주소를 쓴다.
 
+### #47 추천 개수: 말하지 않으면 조회된 결과 전체, 말하면 그만큼만 (`MAX_RESULT_COUNT`·`DEFAULT_RESULT_COUNT` 제거)
+- **무엇을**: `get_pick_count(plan, retrieved_count)`가 사용자가 개수를 말하지 않았으면 `retrieve`에서 조회된 결과 개수를 그대로 돌려주고, 말했으면 조회된 결과 안에서 그 개수만큼만(최소 1) 돌려준다. 상수 `DEFAULT_RESULT_COUNT`(5)와 `MAX_RESULT_COUNT`(20)를 없앴다.
+- **왜**: 검색 단계에서 이미 `TOP_K=20`으로 상한이 걸려 있어 뒤에서 또 상한을 둘 필요가 없고, 기본 5건은 조회된 결과를 불필요하게 줄이고 있었다.
+- **변경**: `backend/agents/graphs/job_search_graph.py`, `backend/tests/unit_tests/test_job_search_agent.py`
+- **검증**: 단위 테스트 `test_개수를_말하지_않으면_조회된_전체를_추천하고_말하면_그만큼만_추천한다`(미지정→전체 15, 3→3, 50→15).
+
 ---
 
 ## 미해결 / 다음 후보
