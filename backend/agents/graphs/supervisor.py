@@ -68,16 +68,18 @@ def make_graph(tools: dict, checkpointer=None):
                             for m in state["messages"][-HISTORY:])
         
         route = await router.ainvoke(
-            "너는 이직 준비 도우미의 Supervisor다. 사용자 마지막 요청을 처리할 다음 Agent를 고른다.\n"
+            "너는 이직 준비 도우미의 Supervisor다. 사용자의 마지막 요청을 처리할 다음 Agent를 고른다.\n"
             "- job_search: 채용공고 찾기/추천 (역할·자격요건 의미 검색)\n"
             "- company_research: 선택된 공고 회사의 산업 현황·발전 방향·경쟁사·직무 기여 방안 웹 리서치\n"
             "- profile_gap: 선택된 공고 대비 내 이력서·포트폴리오의 부족한 점과 보완 방법\n"
             "- FINISH: 요청이 모두 처리됐거나 Agent가 필요 없을 때\n"
-            "규칙: 이번 턴에 이미 실행한 Agent는 다시 고르지 않는다. 요청에 여러 일이 있으면 "
+            "규칙:" \
+            "- 이번 턴에 이미 실행한 Agent는 다시 고르지 않는다. 요청에 **여러 일이 명시된 경우에만** "
             "job_search → company_research → profile_gap 순서로 하나씩 처리한다. "
-            "company_research/profile_gap은 분석할 공고가 필요하다. 사용자가 번호나 id로 가리키면 "
+            "- company_research/profile_gap은 분석할 공고가 필요하다. 사용자가 번호나 id로 가리키면 "
             "posting_number/posting_id를 채우고, 가리키지 않았으면 현재 선택된 공고를 쓴다. "
-            "선택된 공고도 없고 추천 목록만 있으면 FINISH하고 reply로 몇 번 공고인지 묻는다.\n\n"
+            "- 선택된 공고도 없고 추천 목록만 있으면 FINISH하고 reply로 몇 번 공고인지 묻는다." \
+            "- 실행한 Agent 결과로 요청이 충족됐으면 FINISH"
             f"이번 턴에 실행한 Agent: {done or '없음'}\n"
             f"현재 추천 목록:\n{cands}\n"
             f"선택된 공고: {sel_text}\n\n"
