@@ -6,6 +6,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agents.llm import LLM
 from agents.mcp_client import get_first_mcp_result, parse_mcp_tool_result
+from agents.progress import STATUS_DONE, STATUS_START, emit_progress
 from agents.state import Assessments, ProfileGapState, Requirements
 
 EVIDENCE_K = 3   # 요구사항마다 가져올 프로필 원문 조각 수
@@ -20,7 +21,10 @@ def make_graph(tools: dict):
     writer = LLM(primary_timeout=60)
 
     async def load(state: ProfileGapState) -> ProfileGapState:
-        return {"summary": get_first_mcp_result(await tools["get_profile_summary"].ainvoke({}))}
+        emit_progress("profile_gap", "load", STATUS_START, "내 프로필을 불러오는 중")
+        summary = get_first_mcp_result(await tools["get_profile_summary"].ainvoke({}))
+        emit_progress("profile_gap", "load", STATUS_DONE, "프로필 확인 완료" if summary else "적재된 프로필이 없음")
+        return {"summary": summary}
 
     def route_after_load(state: ProfileGapState) -> str:
         return "decompose" if state["summary"] else "no_profile"
@@ -30,15 +34,20 @@ def make_graph(tools: dict):
 
     async def decompose(state: ProfileGapState) -> ProfileGapState:
         posting = state["posting"]
+        emit_progress("profile_gap", "decompose", STATUS_START, "공고 요구사항을 나누는 중")
         reqs = await decomposer.ainvoke(
             "아래 채용공고의 필수 역량(required)과 우대 역량(preferred)을 평가 가능한 개별 요구사항으로 나눠라. "
             "하는 일에서 드러나는 핵심 기술 요구도 required로 포함할 수 있다. 공고에 없는 요구는 만들지 않는다.\n\n"
             f"제목: {posting.get('title')}\n하는 일:\n{posting.get('responsibilities') or '-'}\n"
             f"필수 역량:\n{posting.get('required_qualifications') or '-'}\n"
             f"우대 역량:\n{posting.get('preferred_qualifications') or '-'}\n최소 경력: {posting.get('min_years')}")
-        return {"requirements": reqs.items[:12]}
+        requirements = reqs.items[:12]
+        emit_progress("profile_gap", "decompose", STATUS_DONE, f"요구사항 {len(requirements)}개로 분해",
+                      requirement_count=len(requirements))
+        return {"requirements": requirements}
 
     async def match(state: ProfileGapState) -> ProfileGapState:
+        emit_progress("profile_gap", "match", STATUS_START, "요구사항별로 내 프로필 근거를 찾는 중")
         results = await asyncio.gather(*(
             tools["search_profile"].ainvoke({"query": r.text, "limit": EVIDENCE_K})
             for r in state["requirements"]))
@@ -52,9 +61,11 @@ def make_graph(tools: dict):
             "실제로 적힌 내용만 쓴다. 원문에 없으면 '미충족'(또는 간접 근거만 있으면 '부분')으로 판정하고, "
             "evidence에는 원문을 그대로 짧게 인용한다(지어내지 않는다).\n\n"
             f"프로필 요약: {json.dumps(state['summary'], ensure_ascii=False)}\n\n" + "\n\n".join(blocks))
+        emit_progress("profile_gap", "match", STATUS_DONE, "충족 여부 판정 완료")
         return {"evidence": evidence, "assessments": res.items}
 
     async def synthesize(state: ProfileGapState) -> ProfileGapState:
+        emit_progress("profile_gap", "synthesize", STATUS_START, "역량 분석 리포트를 작성하는 중")
         posting, reqs = state["posting"], state["requirements"]
         table = "\n".join(
             f"- [{a.status}] ({reqs[a.index].type}) {reqs[a.index].text} — {a.comment}"
@@ -72,6 +83,7 @@ def make_graph(tools: dict):
             f"공고: [{posting.get('company')}] {posting.get('title')} (최소 경력 {posting.get('min_years')})\n"
             f"프로필 요약: {json.dumps(state['summary'], ensure_ascii=False)}\n\n판정 결과:\n{table}"
             + (f"\n\n기업분석 리포트:\n{research}" if research else ""))
+        emit_progress("profile_gap", "synthesize", STATUS_DONE, "역량 분석 리포트 작성 완료")
         return {"answer": msg.text}
 
     graph = StateGraph(ProfileGapState)

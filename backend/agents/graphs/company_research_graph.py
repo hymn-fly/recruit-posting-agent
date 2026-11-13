@@ -13,6 +13,7 @@ from langgraph.types import Send
 
 from agents.llm import LLM
 from agents.mcp_client import get_first_mcp_result
+from agents.progress import STATUS_DONE, STATUS_START, emit_progress
 from agents.state import COMPANY_TOPICS, ResearchPlan, ResearchState
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ def make_graph(tools: dict):
     writer = LLM(primary_timeout=60)
 
     async def plan_queries(state: ResearchState) -> ResearchState:
+        emit_progress("company_research", "plan_queries", STATUS_START, "리서치 계획을 세우는 중")
         plan = await planner.ainvoke(
             "채용 지원자를 위한 기업분석 리서치 계획을 세워라. 먼저 실제 채용 법인/계열사(target_company)를 정한다 "
             "— 회사명이 그룹(SK, LG, 현대, 롯데, CJ 등)이면 제목·근무지·하는 일에 적힌 계열사가 대상이다. "
@@ -63,9 +65,12 @@ def make_graph(tools: dict):
                  state["posting"].get("id"), state["posting"].get("company"), state["posting"].get("title"),
                  plan.target_company, plan.industry, plan.competitors,
                  {t.topic: t.queries for t in plan.topics})
+        emit_progress("company_research", "plan_queries", STATUS_DONE, f"조사 대상: {plan.target_company}",
+                      target_company=plan.target_company)
         return {"plan": plan}
 
     async def load_cache(state: ResearchState) -> ResearchState:
+        emit_progress("company_research", "load_cache", STATUS_START, "이전 리서치 결과를 확인하는 중")
         cache_lookup_args = {"company_name": state["posting"]["company"],
                              "target_company": state["plan"].target_company, "max_age_days": CACHE_DAYS}
         cached = get_first_mcp_result(await tools["get_cached_research"].ainvoke(cache_lookup_args))
@@ -74,6 +79,9 @@ def make_graph(tools: dict):
         log.info("event=load_cache_done lookup=%s cache_hit=%s research_id=%s cached_at=%s reused_topics=%s",
                  cache_lookup_args, bool(cached), cached.get("id"), cached.get("created_at"),
                  [t["topic"] for t in cached_company_topics])
+        emit_progress("company_research", "load_cache", STATUS_DONE,
+                      f"재사용할 토픽 {len(cached_company_topics)}개" if cached_company_topics else "재사용할 이전 결과 없음",
+                      reused_topics=len(cached_company_topics))
         return {"cached": cached_company_topics}
 
     def fan_out(state: ResearchState):
@@ -86,6 +94,8 @@ def make_graph(tools: dict):
 
     async def search_topic(arg: dict) -> ResearchState:
         topic, queries = arg["topic"], arg["queries"]
+        topic_step = f"search_topic:{topic}"   # 토픽이 병렬로 돌아서 단계 이름에 토픽을 붙여 start/done을 짝짓는다
+        emit_progress("company_research", topic_step, STATUS_START, f"{TOPIC_TITLES[topic]} 조사 중")
 
         # 1) 토픽의 검색어들을 Tavily에 동시에 보낸다 (하나가 실패해도 나머지는 쓴다)
         responses = await asyncio.gather(*(tavily().ainvoke({"query": q}) for q in queries),
@@ -110,6 +120,7 @@ def make_graph(tools: dict):
 
         if not sources:
             log.warning("event=search_topic_no_results topic=%s outcome=unverified", topic)
+            emit_progress("company_research", topic_step, STATUS_DONE, f"{TOPIC_TITLES[topic]}: 검색 결과 없음")
             return {"topics": [{"topic": topic, "summary": "검색 결과 없음 — 확인 불가", "sources": []}]}
 
         # 3) 모은 출처만 근거로 토픽 요약 ([n] 번호는 이 토픽 안에서의 번호)
@@ -122,11 +133,14 @@ def make_graph(tools: dict):
             f"{_posting_brief(arg['posting'])}\n\n"
             + "\n\n".join(f"[{i}] {s['title']} ({s['url']})\n{s['content']}" for i, s in enumerate(sources, 1)))
         log.info("event=search_topic_done topic=%s sources=%d summary_chars=%d", topic, len(sources), len(msg.text))
+        emit_progress("company_research", topic_step, STATUS_DONE, f"{TOPIC_TITLES[topic]} 조사 완료 (출처 {len(sources)}건)",
+                      source_count=len(sources))
 
         return {"topics": [{"topic": topic, "summary": msg.text,
                             "sources": [{"title": s["title"], "url": s["url"]} for s in sources]}]}
 
     async def synthesize(state: ResearchState) -> ResearchState:
+        emit_progress("company_research", "synthesize", STATUS_START, "기업분석 리포트를 작성하는 중")
         posting, plan = state["posting"], state["plan"]
         order = {t: i for i, t in enumerate(TOPIC_TITLES)}
         topics = sorted(state["cached"] + state.get("topics", []), key=lambda t: order[t["topic"]])
@@ -164,6 +178,7 @@ def make_graph(tools: dict):
         cache_note = (f"\n\n_(회사 단위 토픽 {len(state['cached'])}개는 최근 {CACHE_DAYS}일 내 리서치를 재사용)_"
                       if state["cached"] else "")
         
+        emit_progress("company_research", "synthesize", STATUS_DONE, "기업분석 리포트 작성·저장 완료")
         return {"report": report, "answer": report + cache_note}
 
     graph = StateGraph(ResearchState)

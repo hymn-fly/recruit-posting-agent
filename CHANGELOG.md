@@ -492,6 +492,18 @@
 - **변경**: `backend/api/main.py`(`/jobs`의 `limit`), `frontend/components/Workspace.tsx`
 - **검증**: 화면 동작 확인(자동 테스트 없음).
 
+### #50 에이전트 응답을 SSE로 받아 단계별 진행 상황 표시
+- **무엇을**: 채팅 요청을 끝까지 기다렸다가 한 번에 받던 방식에 더해, 처리하는 동안 "지금 무엇을 하는지"를 단계마다 이벤트로 받아 화면에 보여준다.
+  - `POST /sessions/{sid}/messages/stream`(SSE): `step`(단계 시작/완료) → `done`(기존 `/messages`와 같은 snapshot) 또는 `error`. 15초 동안 조용하면 `: keepalive`를 보낸다. 같은 세션의 앞선 요청이 처리 중이면 "대기 중" 단계를 먼저 보낸다. 기존 `/messages`는 그대로 둔다.
+  - `agents/progress.py`: 노드가 `emit_progress(agent, step, status, message)`로 이벤트를 내고, 요청마다 만든 큐를 `ContextVar`로 넘긴다. 큐가 없으면(일반 `ainvoke`, 테스트) 아무 일도 하지 않는다. supervisor/job_search/company_research/profile_gap 노드에 계측을 넣었다(로직 변경 없음).
+  - 프런트: `lib/sse.ts`(POST + `ReadableStream` SSE 클라이언트와 청크 경계를 다루는 파서), `Workspace.tsx`는 질문을 즉시 보여주고 단계 목록을 처리 중에는 펼쳐서, 끝나면 접어서 남긴다.
+  - `next.config.ts`에 `compress: false`: gzip이 켜져 있으면 프록시가 SSE를 응답이 끝날 때까지 모아서 보낸다.
+- **왜**: 공고 검색·기업분석·역량 분석은 LLM·웹 검색 때문에 수십 초 걸리는데, 그동안 화면에 아무 변화가 없어 멈춘 것처럼 보였다.
+- **변경**: `backend/agents/progress.py`, `backend/agents/graphs/{supervisor,job_search_graph,company_research_graph,profile_gap_graph}.py`, `backend/api/main.py`(`run_chat_turn` 분리, 스트림 엔드포인트), `backend/tests/unit_tests/test_progress_stream.py`, `frontend/lib/sse.ts`, `frontend/components/Workspace.tsx`, `frontend/next.config.ts`
+- **검증**: 단위 테스트 50개(큐 격리·병렬 태스크 수집·하트비트·SSE 순서·에러·404·동시 두 세션 이벤트 비섞임·대기 이벤트·노드 계측). 실제 소켓의 `StreamingResponse`와 Next 프록시(gzip 요청, 프로덕션 빌드 포함)에서 이벤트가 발생 시각대로 점진 도착함을 `curl -N`으로 확인. 실제 에이전트로 "서울에서 MLOps 공고 찾아줘"를 돌려 단계 6개와 `done`이 순서대로 오는 것을 확인. SSE 파서는 청크 경계·하트비트·깨진 JSON 시나리오 7개를 확인.
+- **스파이크에서 알게 된 점**: 하위 그래프를 `ainvoke`로 따로 실행하면 `get_stream_writer()` 이벤트가 상위 스트림으로 올라오지 않아 `ContextVar` 큐 방식을 썼다. 프로덕션 빌드에서는 `rewrites`의 `destination`이 빌드 시점의 `API_BASE_URL`로 고정된다.
+- **알아둘 점**: 클라이언트가 연결을 끊으면 진행 중인 작업도 취소된다(중단 버튼과 이어 붙이기 쉽다). 기업분석처럼 Tavily를 쓰는 단계(토픽 병렬 조사)는 실제 호출로는 확인하지 않았고 계측만 단위 테스트 수준이다. 브라우저 화면 동작은 직접 확인하지 못했다.
+
 ---
 
 ## 미해결 / 다음 후보

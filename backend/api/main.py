@@ -1,5 +1,6 @@
 """개인용 웹 API. uv run uvicorn api.main:app --host 127.0.0.1 --port 8000"""
 import asyncio
+import json
 import logging
 import tempfile
 import time
@@ -9,18 +10,21 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 
 from common.observability import configure_logging, request_id
 from agents.graphs.supervisor import make_graph, input_to_agent_state
 from agents.mcp_client import open_tools
+from agents.progress import STATUS_START, emit_progress, iter_progress, progress_sink
 from mcp_server import db
 from scripts.ingest_profile import extract_text, ingest, summarize
 
 log = logging.getLogger(__name__)
 sessions: dict[str, asyncio.Lock] = {}
 profile_lock = asyncio.Lock()
+STREAM_HEARTBEAT_SECONDS = 15   # 이 시간 동안 진행 이벤트가 없으면 SSE 연결 유지용 주석 줄을 보낸다
 
 
 @asynccontextmanager
@@ -109,28 +113,80 @@ class Message(BaseModel):
     text: str = Field(min_length=1, max_length=12000)
 
 
+async def run_chat_turn(sid: str, text: str, started: float) -> dict:
+    """세션 락을 잡은 상태에서 한 턴을 실행하고 최종 snapshot을 돌려준다."""
+    cfg = config(sid)
+    log.info("event=chat_start session=%s lock_wait_seconds=%.2f", sid, time.perf_counter() - started)
+    try:
+        # 1) Agent 그래프 실행
+        await app.state.graph.ainvoke(input_to_agent_state(text), cfg)
+
+        # 2) 새로 만들어진 역량 분석 저장 후 화면용 상태 조립
+        await save_gap_report_of_session(sid)
+        result = await snapshot(sid)
+        log.info("event=chat_done session=%s candidates=%d messages=%d selected_posting_id=%s elapsed_seconds=%.2f",
+                 sid, len(result["candidates"]), len(result["messages"]),
+                 (result["selected_posting"] or {}).get("id"), time.perf_counter() - started)
+        return result
+    except asyncio.CancelledError:
+        log.warning("event=chat_cancelled session=%s elapsed_seconds=%.2f", sid, time.perf_counter() - started)
+        raise
+    except Exception:
+        log.exception("event=chat_failed session=%s elapsed_seconds=%.2f", sid, time.perf_counter() - started)
+        raise
+
+
 @app.post("/sessions/{sid}/messages")
 async def chat(sid: str, body: Message):
-    cfg = config(sid)
+    config(sid)
     started = time.perf_counter()
     log.info("event=chat_queued session=%s input_chars=%d", sid, len(body.text))
-    
+
     async with sessions[sid]:
-        log.info("event=chat_start session=%s lock_wait_seconds=%.2f", sid, time.perf_counter() - started)
-        try:
-            await app.state.graph.ainvoke(input_to_agent_state(body.text), cfg)
-            await save_gap_report_of_session(sid)
-            result = await snapshot(sid)
-            log.info("event=chat_done session=%s candidates=%d messages=%d selected_posting_id=%s elapsed_seconds=%.2f",
-                     sid, len(result["candidates"]), len(result["messages"]),
-                     (result["selected_posting"] or {}).get("id"), time.perf_counter() - started)
-            return result
-        except asyncio.CancelledError:
-            log.warning("event=chat_cancelled session=%s elapsed_seconds=%.2f", sid, time.perf_counter() - started)
-            raise
-        except Exception:
-            log.exception("event=chat_failed session=%s elapsed_seconds=%.2f", sid, time.perf_counter() - started)
-            raise
+        return await run_chat_turn(sid, body.text, started)
+
+
+def format_server_sent_event(event_name: str, data) -> str:
+    """SSE 한 건: `event:` 줄 + `data:` 줄(JSON) + 빈 줄."""
+    return f"event: {event_name}\ndata: {json.dumps(jsonable_encoder(data), ensure_ascii=False)}\n\n"
+
+
+@app.post("/sessions/{sid}/messages/stream")
+async def chat_stream(sid: str, body: Message):
+    """chat과 같은 일을 하되, 진행 단계를 SSE로 흘려보낸다. step... -> done(최종 snapshot) 또는 error."""
+    config(sid)   # 없는 세션은 스트림을 열기 전에 404
+    started = time.perf_counter()
+    log.info("event=chat_stream_queued session=%s input_chars=%d", sid, len(body.text))
+
+    async def event_generator():
+        # 이 요청 전용 큐를 만들어 컨텍스트에 붙인다. 아래에서 만드는 작업 태스크는 이 컨텍스트를 복사해 간다
+        progress_queue: asyncio.Queue = asyncio.Queue()
+        progress_sink.set(progress_queue)
+
+        # 같은 세션의 앞선 요청이 끝나길 기다리는 동안에도 화면에 상태를 보여준다
+        if sessions[sid].locked():
+            emit_progress("session", "queued", STATUS_START, "앞선 요청이 끝나기를 기다리는 중")
+            yield format_server_sent_event("step", progress_queue.get_nowait())
+
+        async with sessions[sid]:
+            turn_task = asyncio.create_task(run_chat_turn(sid, body.text, started))
+            try:
+                async for progress_event in iter_progress(turn_task, progress_queue, STREAM_HEARTBEAT_SECONDS):
+                    # None은 한동안 조용했다는 뜻: 연결이 끊기지 않게 SSE 주석 줄을 보낸다
+                    yield ": keepalive\n\n" if progress_event is None else format_server_sent_event("step", progress_event)
+
+                yield format_server_sent_event("done", turn_task.result())
+            except asyncio.CancelledError:
+                raise   # 클라이언트가 끊음. finally에서 작업도 취소한다
+            except Exception:
+                # run_chat_turn이 이미 로그를 남겼다. 스트림이 시작된 뒤라 상태코드 대신 error 이벤트로 알린다
+                yield format_server_sent_event("error", {"message": "처리에 실패했습니다. 서버 로그와 API 키·DB 연결을 확인해 주세요."})
+            finally:
+                if not turn_task.done():
+                    turn_task.cancel()
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 async def save_gap_report_of_session(sid: str) -> None:

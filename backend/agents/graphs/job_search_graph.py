@@ -14,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agents.llm import LLM
 from agents.mcp_client import parse_mcp_tool_result
+from agents.progress import STATUS_DONE, STATUS_START, emit_progress
 from agents.state import JobSearchPlan, JobSearchState, Ranking
 
 log = logging.getLogger(__name__)
@@ -94,12 +95,14 @@ def make_graph(tools: dict):
 
     async def plan(state: JobSearchState) -> JobSearchState:
         log.info("event=plan_start input_chars=%d", len(state["question"]))
+        emit_progress("job_search", "plan", STATUS_START, "검색 조건을 만드는 중")
         search_plan = await planner.ainvoke(
             PLAN_PROMPT
             + f"사용자 프로필 요약: {state.get('profile') or '(없음)'}\n"
             + f"요청: {state['question']}")
         log.info("event=plan_done search_params=%s",
                  json.dumps(search_plan.model_dump(exclude_none=True), ensure_ascii=False))
+        emit_progress("job_search", "plan", STATUS_DONE, "검색 조건 생성 완료")
         return {"plan": search_plan}
 
     async def retrieve(state: JobSearchState) -> JobSearchState:
@@ -107,6 +110,7 @@ def make_graph(tools: dict):
         # result_count는 추천 개수라서 검색 도구에 넘기지 않는다
         search_args = {k: v for k, v in state["plan"].model_dump(exclude={"result_count"}).items() if v}
         started = time.perf_counter()
+        emit_progress("job_search", "retrieve", STATUS_START, "채용공고를 검색하는 중")
         log.info("event=retrieve_start tool=semantic_search_jobs args=%s", json.dumps({**search_args, "limit": TOP_K}, ensure_ascii=False))
         try:
             raw = await tools["semantic_search_jobs"].ainvoke({**search_args, "limit": TOP_K})
@@ -118,6 +122,7 @@ def make_graph(tools: dict):
         if not results:
             log.warning("event=retrieve_empty tool_result=%s", repr(raw)[:1000])
         log.info("event=retrieve_done results=%d", len(results))
+        emit_progress("job_search", "retrieve", STATUS_DONE, f"공고 {len(results)}건 검색됨", result_count=len(results))
         for rank, row in enumerate(results, 1):
             log.info("event=retrieve_row rank=%d %s", rank, format_search_row_for_log(row))
         return {"results": results}
@@ -151,6 +156,7 @@ def make_graph(tools: dict):
             "후보는 마감이 가까운 순으로 이미 정렬되어 있다. 이 순서를 바꾸지 말고, 앞에서부터 요청(자격요건 등 조건이 "
             "있으면 그 조건)에 맞는 것을 고른다. "
             "마감일은 후보의 deadline 필드 값만 쓴다.\n" if plan.sort_by_deadline else "")
+        emit_progress("job_search", "rerank", STATUS_START, "검색 결과를 재순위하는 중")
         log.info("event=rerank_start input_candidates=%d pick_count=%d", len(state["results"]), pick_count)
         
         ranking = await ranker.ainvoke(
@@ -167,6 +173,7 @@ def make_graph(tools: dict):
         by_id = {r["id"]: r for r in state["results"]}
         candidates = [{**by_id[pick.id], "reason": pick.reason} for pick in ranking.picks if pick.id in by_id][:pick_count]
         log.info("event=rerank_done picked_ids=%s", [c["id"] for c in candidates])
+        emit_progress("job_search", "rerank", STATUS_DONE, f"공고 {len(candidates)}건 선정", pick_count=len(candidates))
 
         if not candidates:
             log.warning("event=rerank_empty returned_ids=%s valid_ids=%s", [pick.id for pick in ranking.picks], list(by_id))

@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph
 from agents.llm import LLM
 from agents.mcp_client import get_first_mcp_result
+from agents.progress import STATUS_DONE, STATUS_START, emit_progress
 from agents.state import AppState, Route
 
 log = logging.getLogger(__name__)
@@ -51,10 +52,12 @@ def make_graph(tools: dict, checkpointer=None):
     router = LLM(schema=Route, primary_timeout=15)
 
     async def supervisor(state: AppState) -> AppState:
+        emit_progress("supervisor", f"route:{state.get('steps', 0)}", STATUS_START, "요청을 분석하는 중")
         log.info("event=supervisor_start steps=%d candidates=%d selected_posting_id=%s", state.get("steps", 0), len(state.get("candidates") or []), (state.get("selected_posting") or {}).get("id"))
         done = [o["agent"] for o in state.get("turn_outputs", [])]
         
         if state.get("steps", 0) >= MAX_STEPS:
+            emit_progress("supervisor", f"route:{state.get('steps', 0)}", STATUS_DONE, "답변을 정리하는 중", next="FINISH")
             return {"route": Route(next="FINISH", reason="이번 턴 최대 실행 수 도달").model_dump()}
         
         cands = "\n".join(f"{i}. [{c['company']}] {c['title']} (id={c['id']})"
@@ -101,6 +104,9 @@ def make_graph(tools: dict, checkpointer=None):
                                      reply="어떤 공고를 분석할까요? 먼저 공고를 검색하거나 번호/id로 알려주세요.")
                 
         log.info("event=route_decided next=%s reason=%r", out["route"].next, out["route"].reason)
+        next_label = AGENT_LABELS.get(out["route"].next)
+        emit_progress("supervisor", f"route:{state.get('steps', 0)}", STATUS_DONE,
+                      f"{next_label} 단계로 진행" if next_label else "답변을 정리하는 중", next=out["route"].next)
         out["route"] = out["route"].model_dump()   # checkpointer 직렬화를 위해 dict로 저장
         return out
 
