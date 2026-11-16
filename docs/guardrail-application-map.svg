@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="750" viewBox="0 0 1100 750" role="img" aria-labelledby="title desc">
+<title id="title">가드레일 적용 위치: 입력, 자료, 외부 전송, 도구 실행, 저장과 출력</title>
+<desc id="desc">사용자 입력은 G1을 거쳐 Supervisor와 Agent로 들어온다. Agent는 자료를 읽을 때 G2, 모델에 전송할 때 G3, 도구를 실행할 때 G4를 거친다. 생성 결과는 G5를 통과해야 상태와 DB에 저장되고 API와 화면에 표시된다. 모든 경계는 적용 예정인 설계다.</desc>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;fill:#172033}.title{font-size:25px;font-weight:750}.sub{font-size:14px;fill:#526175}.head{font-size:18px;font-weight:750}.body{font-size:14px;fill:#3c4b60}.tag{font-size:13px;font-weight:700;fill:#526175}.arrow{fill:none;stroke:#8593a6;stroke-width:2;marker-end:url(#arrow)}.boundary{stroke-width:2}.selected .boundary{stroke:#111827;stroke-width:4}</style>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#8593a6"/></marker></defs>
+<rect width="1100" height="750" rx="18" fill="#f7f9fc"/>
+<text x="30" y="42" class="title">가드레일은 다섯 경계에 적용합니다</text>
+<text x="30" y="69" class="sub">설계안 · 미구현 | 기존 Supervisor와 병렬 Agent 구조 유지</text>
+<g>
+<rect class="boundary" x="30" y="105" width="210" height="112" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="48" y="136" class="head">사용자 입력</text>
+<text x="48" y="163" class="body">대화 · 업로드 · CLI</text>
+</g>
+<g id="g1" data-guard="g1">
+<rect class="boundary" x="275" y="105" width="230" height="112" rx="12" fill="#eaf2ff" stroke="#6996df"/>
+<text x="293" y="136" class="head">G1  입력 검사</text>
+<text x="293" y="163" class="body">전체 원문 · 크기 · 목적</text>
+<text x="293" y="186" class="body">비밀값 검사·마스킹</text>
+</g>
+<g>
+<rect class="boundary" x="540" y="105" width="240" height="112" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="558" y="136" class="head">Supervisor</text>
+<text x="558" y="163" class="body">검증된 입력으로 라우팅</text>
+<text x="558" y="186" class="body">기존 Agent 실행 규칙 유지</text>
+</g>
+<g>
+<rect class="boundary" x="815" y="105" width="255" height="112" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="833" y="136" class="head">Agent 실행</text>
+<text x="833" y="163" class="body">공고 검색 / 기업분석</text>
+<text x="833" y="186" class="body">역량 분석 · 필요 시 병렬</text>
+</g>
+<path class="arrow" d="M240 161H275"/>
+<path class="arrow" d="M505 161H540"/>
+<path class="arrow" d="M780 161H815"/>
+<text x="30" y="267" class="tag">Agent가 자료·모델·도구를 사용할 때마다 아래 경계를 적용</text>
+<g id="g2" data-guard="g2">
+<rect class="boundary" x="30" y="285" width="320" height="176" rx="12" fill="#e8f7f1" stroke="#57aa8e"/>
+<text x="48" y="316" class="head">G2  자료 검사</text>
+<text x="48" y="343" class="body">공고 · 프로필 근거 · 웹 · 캐시</text>
+<text x="48" y="366" class="body">구조·출처·크기·숨은 지시 검사</text>
+<text x="48" y="389" class="body">통과한 자료도 지시 권한 없음</text>
+<text x="48" y="412" class="body">의심 출처 제외 / 근거 부족 표시</text>
+</g>
+<g id="g3" data-guard="g3">
+<rect class="boundary" x="390" y="285" width="320" height="176" rx="12" fill="#f2edff" stroke="#a18bd6"/>
+<text x="408" y="316" class="head">G3  외부 전송 검사</text>
+<text x="408" y="343" class="body">LLM · 임베딩 호출 직전</text>
+<text x="408" y="366" class="body">개인정보 최소화 · 제공자 정책</text>
+<text x="408" y="389" class="body">입출력 토큰·시간 예산</text>
+<text x="408" y="412" class="body">기본 모델·폴백에 동일 적용</text>
+</g>
+<g id="g4" data-guard="g4">
+<rect class="boundary" x="750" y="285" width="320" height="176" rx="12" fill="#fff3df" stroke="#d6a35a"/>
+<text x="768" y="316" class="head">G4  도구 실행 검사</text>
+<text x="768" y="343" class="body">MCP · Tavily · 쓰기 인자</text>
+<text x="768" y="366" class="body">허용 도구·대상·인자·검색어</text>
+<text x="768" y="389" class="body">검색 횟수·동시 실행·취소</text>
+<text x="768" y="412" class="body">병렬·폴백·재시도 예산 공유</text>
+</g>
+<text x="30" y="491" class="sub">G2~G4는 고정된 순서의 세 노드가 아니라, 각 작업 직전에 반복하는 검사입니다.</text>
+<text x="30" y="531" class="tag">생성 초안은 노드 내부에서 검증 · 검증 전 상태 반환과 저장 금지</text>
+<g id="g5" data-guard="g5">
+<rect class="boundary" x="30" y="550" width="320" height="140" rx="12" fill="#ffeded" stroke="#d98a8a"/>
+<text x="48" y="581" class="head">G5  저장·출력 검사</text>
+<text x="48" y="608" class="body">비밀값 · 근거 ID · 인용 · URL</text>
+<text x="48" y="631" class="body">노드 반환 전 / DB 쓰기 전</text>
+<text x="48" y="654" class="body">조회·SSE 최종 반환 전 재검사</text>
+</g>
+<g>
+<rect class="boundary" x="390" y="550" width="320" height="140" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="408" y="581" class="head">검증된 결과만 보관</text>
+<text x="408" y="608" class="body">그래프 상태 · 체크포인트</text>
+<text x="408" y="631" class="body">보고서 DB · 재사용 캐시</text>
+<text x="408" y="654" class="body">캐시 정책 버전·재검증</text>
+</g>
+<g>
+<rect class="boundary" x="750" y="550" width="320" height="140" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="768" y="581" class="head">API → 화면</text>
+<text x="768" y="608" class="body">snapshot · 보고서 조회 · SSE</text>
+<text x="768" y="631" class="body">검증 완료 결과만 반환</text>
+<text x="768" y="654" class="body">외부 이미지 자동 로딩 차단</text>
+</g>
+<path class="arrow" d="M350 620H390"/>
+<path class="arrow" d="M710 620H750"/>
+<text x="30" y="726" class="sub">필수 검사 실패 → 해당 실행·저장 중단 + 고정 안내 | 로그에는 원문·비밀값을 남기지 않음</text></svg>
