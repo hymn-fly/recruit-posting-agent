@@ -552,6 +552,20 @@
 - **변경**: `backend/agents/guardrails/policy.py`, `backend/agents/guardrails/__init__.py`, `backend/agents/guardrails/validation.py`, API·CLI·문서 적재·LLM·임베딩 호출부.
 - **검증**: 테스트는 실행하지 않았다. `rg`로 검사 함수 호출이 모두 `GuardrailBoundary` 멤버를 사용하는 것을 확인했다.
 
+### #57 G2 자료 검사를 공고·웹 검색·캐시·프로필에 연결
+- **무엇을**: 공고 조회·검색 결과와 프로필 요약·원문·파일명, 기업분석 캐시·출처·웹 검색 결과를 프롬프트에 넣기 전에 검사한다. 알려진 필드와 수치 ID만 사용하고 비밀값·연락처는 마스킹한다. 의심 지시문·길이 초과 자료는 제외하며 URL은 HTTP(S)만 허용한다. 캐시 출처가 빠지면 인용 번호가 바뀌지 않도록 해당 토픽을 재검색한다.
+- **왜**: 공고 검색 경로의 누락, 길이 초과 자료로 전체 분석이 실패하는 문제, 기업분석 후속 노드의 원문 재사용과 병렬 프로필 분석의 공유 객체 수정을 해결하기 위해.
+- **변경**: `backend/agents/guardrails/validation.py`, `backend/agents/graphs/{job_search_graph,company_research_graph,profile_gap_graph,supervisor}.py`, `backend/tests/unit_tests/{test_guardrail_materials,test_company_research_agent}.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 72개 통과. 길이 초과·악성 URL·잘못된 구조·중첩 프로필·캐시 재검사·LLM 재순위 없는 검색·출처 메타데이터 검사·원본 보존을 검증했다. `git diff --check` 통과.
+- **범위**: 규칙 기반 지시문 탐지이며 모든 프롬프트 인젝션을 탐지한다는 보장은 없다. 실제 LLM·DB·Tavily 통합 호출은 수행하지 않았다. 기존 작업 트리의 공통 검사 함수 및 G1/G3 호출부 연결도 함께 포함한다.
+
+### #58 외부 자료를 XML 영역으로 구분
+- **무엇을**: 공통 `format_external_materials`를 추가했다. 작업 지시 뒤에서 `external_materials` 영역의 취급 규칙을 설명하고, 공고·프로필·웹 검색·리서치 캐시 요약 및 출처를 종류별 `material` 요소 안에 넣는다. Supervisor의 공고 문맥과 세 하위 Agent의 모든 자료 사용 프롬프트에 적용했다.
+- **왜**: 지시와 자료의 경계를 명확히 하고 자료 속 닫는 태그가 직렬화된 XML 구조를 바꾸지 않도록 하기 위해. 기존 G2 내용 검사는 계속 적용한다.
+- **변경**: `backend/agents/guardrails/{material_prompt,validation}.py`, `backend/agents/graphs/{supervisor,job_search_graph,company_research_graph,profile_gap_graph}.py`, `backend/tests/unit_tests/{test_material_prompt,test_guardrail_materials}.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 76개 통과. 닫는 태그·CDATA·특수문자 자료의 XML 구조 보존, ID·URL 왕복 보존, 실제 검색·기업분석·프로필 프롬프트의 XML 파싱을 확인했다. `git diff --check` 통과.
+- **범위**: XML은 프롬프트 구조 표시이며 모델이 인젝션을 따르지 않음을 보장하지 않는다. 실제 제공자 호출을 통한 응답 품질 평가는 수행하지 않았다.
+
 ---
 
 ## 2026-11-16
@@ -573,6 +587,26 @@
 - **왜**: 파일 입력 경로를 한 곳으로 모아 중복 추출과 잘못된 인자 전달을 없애기 위해. 문서 읽기 실패·빈 내용은 `DocumentTextError`로 구분해 API의 기존 422 응답을 유지하고, DB·임베딩 오류와 혼동하지 않는다. CLI는 읽을 수 없거나 빈 문서를 안내 후 건너뛴다.
 - **변경**: `backend/scripts/ingest_profile.py`, `backend/api/main.py`, `backend/tests/unit_tests/test_redaction_boundaries.py`, `CHANGELOG.md`.
 - **검증**: `uv run pytest backend/tests/unit_tests -q` — 109개 통과. 원본 파일 전달, 단일 텍스트 추출, 해시 전 마스킹, 빈 문서·읽기 실패 시 422 및 DB·요약 미호출을 확인했다. 관련 코드에서 `extracted_text` 참조가 없으며 변경한 추적 파일의 `git diff --check` 통과.
+
+### #62 `redact_sensitive_text`에서 길이 초과 검사 제거
+- **무엇을**: 마스킹 함수 안의 `max_message_chars` 길이 검사와 `INPUT_TOO_LARGE` 차단 분기를 제거했다. 함수는 비밀값·연락처 마스킹과 판정 로그만 담당한다.
+- **왜**: 마스킹 함수가 길이 검증까지 맡으면 책임이 섞인다. 채팅 입력의 길이 제한은 `api/main.py`의 `Message` 모델(`max_length=12000`)이 이미 수행한다.
+- **변경**: `backend/agents/guardrails/validation.py`, `backend/tests/unit_tests/test_redaction_boundaries.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q`. 길이 초과 입력이 마스킹 함수에서 차단되지 않고 그대로 통과하는지 확인하는 테스트로 교체했다.
+
+### #63 프로필 지시문 제거를 조회 시점에서 적재 시점으로 이동
+- **무엇을**: `remove_instruction_lines()`를 추가해 `ingest()`가 마스킹 전에 모델 지시문으로 보이는 줄을 제거한 뒤 저장하게 했다. `profile_gap_graph`의 `validate_profile_material()`과 청크별 검사를 삭제하고 검색된 프로필 청크를 그대로 사용한다.
+- **왜**: 프로필은 사용자가 직접 올린 문서라 조회할 때마다 같은 검사를 반복할 필요가 없다. 적재 때 한 번 정리하면 요구사항마다 하는 청크 검사가 사라지고, 의심 청크가 통째로 빠져 근거가 줄어드는 문제도 없어진다. 문서 전체를 버리지 않고 지시문 줄만 제거한다.
+- **변경**: `backend/agents/guardrails/validation.py`, `backend/scripts/ingest_profile.py`, `backend/agents/graphs/profile_gap_graph.py`, `backend/tests/unit_tests/{test_redaction_boundaries,test_guardrail_materials}.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 104개 통과. 지시문 줄만 제거·제거 줄 수만 로그에 기록·깨끗한 텍스트의 줄바꿈 보존, 해시 계산 전 제거를 확인했다. 기존 `api/main.py` 변경으로 인한 테스트 3개 실패는 이번 변경과 무관하다.
+- **범위**: 이미 적재된 프로필은 정리되지 않으므로 다시 적재해야 한다. 프로필 요약(`sanitize_profile_summary`)과 공고·기업분석 자료 검사는 그대로 유지한다. 규칙 기반 탐지라 모든 인젝션을 막는다는 보장은 없다.
+
+### #64 `sanitize_*` 제거와 수집·저장 시점 정리로 이동
+- **무엇을**: `validation.py`의 `sanitize_material_text/url`, `sanitize_posting_material`, `sanitize_profile_summary`, `sanitize_sources`와 `validate_untrusted_content`를 삭제하고 그래프의 호출부를 모두 걷어냈다. 대신 `is_http_url()`(판정만 수행)을 추가했다. 공고는 `upsert_job_posting` 저장 직전에 지시문 줄 제거·마스킹·URL 검사를 하고(`clean_posting_text`, `GuardrailBoundary.POSTING_COLLECTION`), 웹 검색 결과는 검색 직후 URL 검사와 지시문 줄 제거를 하며, 캐시 출처는 형식이 맞지 않으면 토픽을 다시 검색한다.
+- **왜**: `sanitize_*`가 길이 검사·지시문 탐지·마스킹·원본 복사를 한 함수에 섞어(AGENTS.md 단일 책임 규칙 위반) 조회할 때마다 같은 검사를 반복했다. 자료는 들어오는 시점에 한 번 정리하면 충분하다. 코드에서 공고 객체를 직접 수정하는 곳은 없어 병렬 Agent의 공유 객체 문제는 실제 오류가 아니었고, 복사 목적도 함께 사라졌다.
+- **변경**: `backend/agents/guardrails/{validation,policy}.py`, `backend/agents/graphs/{supervisor,job_search_graph,company_research_graph,profile_gap_graph}.py`, `mcp_server/collect_server.py`, `backend/tests/unit_tests/test_guardrail_materials.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 110개 통과, 3개 실패(`api/main.py`에서 `redact_sensitive_text`가 빠져 생긴 기존 실패, 이번 변경과 무관). 저장 직전 본문 정리, 비 http URL 저장 거부, 회사·제목 없는 검색 결과 제외, 지시문 줄이 제거된 웹 결과, 잘못된 캐시 출처의 재검색, 프롬프트 XML 구조를 확인했다.
+- **범위**: 이미 DB에 저장된 공고·캐시는 정리되지 않는다. 길이 한도(12,000자 등)와 `source_snapshot` 정리는 적용하지 않았다. 프로필 요약은 정리된 원문으로 만든 LLM 출력을 그대로 쓴다.
 
 ## 미해결 / 다음 후보
 - Gemma가 거의 항상 타임아웃 → 서킷 브레이커로 낭비는 줄였지만(#15), 기본 모델 교체 검토는 여전히 필요
