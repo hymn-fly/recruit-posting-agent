@@ -14,7 +14,8 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# 저장소 루트(mcp_server, common) + backend(agents 가드레일). 자식 프로세스는 PYTHONPATH를 물려받지 않는다.
+sys.path[:0] = [str(Path(__file__).resolve().parent.parent), str(Path(__file__).resolve().parent.parent / "backend")]
 
 from common.observability import configure_logging  # noqa: E402
 

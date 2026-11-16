@@ -117,7 +117,6 @@ class Message(BaseModel):
 async def run_chat_turn(sid: str, text: str, started: float) -> dict:
     """세션 락을 잡은 상태에서 한 턴을 실행하고 최종 snapshot을 돌려준다."""
     cfg = config(sid)
-    # 일반 응답과 SSE가 공유하는 진입점에서 입력을 한 번 검사한다.
     log.info("event=chat_start session=%s lock_wait_seconds=%.2f", sid, time.perf_counter() - started)
     try:
         # 1) Agent 그래프 실행
