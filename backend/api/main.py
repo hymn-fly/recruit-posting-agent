@@ -204,7 +204,7 @@ async def save_gap_report_of_session(sid: str) -> None:
         posting_id, report)
 
 
-@app.post("/sessions/{sid}/select/{posting_id}")
+@app.put("/sessions/{sid}/select/{posting_id}")
 async def select_posting(sid: str, posting_id: int):
     cfg = config(sid)
     async with sessions[sid]:

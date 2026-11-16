@@ -326,7 +326,7 @@ export function Workspace() {
     await action("공고를 불러오는 중입니다", async () => {
       setSession(
         await api<Session>(`/sessions/${session.session_id}/select/${job.id}`, {
-          method: "POST",
+          method: "PUT",
         }),
       );
       setTab("detail");

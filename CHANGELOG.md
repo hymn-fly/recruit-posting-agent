@@ -512,6 +512,12 @@
 - **변경**: `frontend/components/Workspace.tsx`
 - **검증**: 코드 수정만 했고 브라우저 화면은 직접 확인하지 못했다(자동 테스트 없음).
 
+### #52 세션 공고 선택 API를 PUT으로 변경
+- **무엇을**: `PUT /sessions/{sid}/select/{posting_id}`로 세션의 선택 공고를 갱신하고, 프런트엔드 요청 메서드도 `PUT`으로 맞췄다.
+- **왜**: 공고 생성이 아니라 세션의 현재 선택 상태를 변경하는 작업이므로 수정 의미의 `PUT`이 적절하다.
+- **변경**: `backend/api/main.py`, `frontend/components/Workspace.tsx`
+- **검증**: 기존 공고 선택 단위 테스트를 실행하고 라우트가 PUT만 허용하는지 확인.
+
 ---
 
 ## 미해결 / 다음 후보
