@@ -10,10 +10,13 @@ from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# 저장소 루트(mcp_server, common) + backend(agents 가드레일). 자식 프로세스는 PYTHONPATH를 물려받지 않는다.
+sys.path[:0] = [str(Path(__file__).resolve().parent.parent), str(Path(__file__).resolve().parent.parent / "backend")]
 
 from mcp_server.db import KST_TODAY_SQL, get_company_id_by_name, lifespan, pool  # noqa: E402
 from mcp_server.embeddings import DIM, MODEL, embed_documents, text_hash, to_pg  # noqa: E402
+from agents.guardrails.policy import GuardrailBoundary  # noqa: E402
+from agents.guardrails.validation import is_http_url, redact_sensitive_text, remove_evil_instruction_lines  # noqa: E402
 
 # AI Engineer 관련으로 적재하는 직군. 이 밖의 category는 upsert_job_posting이 거부한다
 ALLOWED_CATEGORIES = ("AI Engineer", "ML Engineer", "LLM Engineer", "MLOps", "Data")
@@ -108,6 +111,16 @@ async def upsert_company(name: str, portal_url: str, access_method: str = "unkno
     return dict(row)
 
 
+def clean_posting_text(text: Optional[str]) -> Optional[str]:
+    """공고 본문에서 모델 지시문 줄을 제거하고 비밀값·연락처를 마스킹한다."""
+    if text is None:
+        return None
+
+    text_without_instructions = remove_evil_instruction_lines(text, GuardrailBoundary.POSTING_COLLECTION)
+    masked_text, _ = redact_sensitive_text(text_without_instructions, GuardrailBoundary.POSTING_COLLECTION)
+    return masked_text
+
+
 @mcp.tool()
 async def upsert_job_posting(company_name: str, title: str, url: Optional[str] = None,
                              location: Optional[str] = None, employment_type: Optional[str] = None,
@@ -121,6 +134,16 @@ async def upsert_job_posting(company_name: str, title: str, url: Optional[str] =
     """공고 1건을 저장한다. 이미 있으면 last_seen_at 등을 갱신한다. 날짜는 YYYY-MM-DD."""
     if category is not None and category not in ALLOWED_CATEGORIES:
         raise ValueError(f"category는 {ALLOWED_CATEGORIES} 중 하나여야 함: {category!r}")
+    if url is not None and not is_http_url(url):
+        raise ValueError(f"url은 http(s) 주소여야 함: {url!r}")
+
+    # 크롤링한 본문에 섞인 모델 지시문과 민감 정보는 저장 전에 한 번만 정리한다.
+    title = clean_posting_text(title)
+    location = clean_posting_text(location)
+    responsibilities = clean_posting_text(responsibilities)
+    required_qualifications = clean_posting_text(required_qualifications)
+    preferred_qualifications = clean_posting_text(preferred_qualifications)
+
     connection_pool = await pool()
     async with connection_pool.acquire() as conn:
         cid = await get_company_id_by_name(conn, company_name)
