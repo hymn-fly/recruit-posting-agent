@@ -1,5 +1,9 @@
 ## Conventions
 - use uv for python package manager. make virtual env using uv, use pyproject.toml for dependency management.
-- when fixing the codes, add the change log(what/why/changed files/verify function) to `CHANGELOG.md`. Commit the changes with a commit message (subject + body) that groups the changes by purpose, then push to `origin`(https://github.com/hymn-fly/recruit-posting-agent.git). Never commit the secret files such as `.env`.
+- when fixing the codes, add the change log(what/why/changed files/verify function) to `CHANGELOG.md`. 
 - Use descriptive function names that state what the function does (e.g., `get_job_posting_by_id`, `transform_posting_to_summary_string`). variable name also should be descriptive.
-- When a function is longer than 10-15 lines, add comments and empty lines between its logical steps.
+- Separate the logical steps inside every function with a blank line, regardless of function length. Group consecutive lines that serve one purpose into a block, and put one blank line between blocks (e.g., in `plan_queries`: block 1 emits the start event; block 2 sanitizes the posting and calls the LLM; block 3 logs the result and emits the done event). A function with only one logical step needs no blank lines. When a function is longer than 10-15 lines, also add a short comment above each block that explains what the step does.
+- Single responsibility: a function must do exactly what its name says, and nothing else. Do not bundle unrelated checks or side effects into it (e.g., `redact_sensitive_text` only masks sensitive values; it must not also validate input length, and `validate_untrusted_content` must not also redact). Put each concern in its own function named for that concern, and compose them explicitly at the call site or in a clearly named wrapper (e.g., `validate_and_redact_untrusted_content`). If a function needs "and" in its description, split it or rename it to say both things.
+
+### API
+- HTTP Method should be used properly. If api goal is just query -> GET, create record -> POST, edit record -> PUT, delete record -> DELETE. 
