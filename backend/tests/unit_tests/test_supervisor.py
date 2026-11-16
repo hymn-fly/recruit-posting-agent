@@ -1,4 +1,5 @@
 """Supervisor(agents/graphs/supervisor.py) 단위 테스트: 라우팅과 공고 선택만 보고, 하위 Agent 그래프는 가짜로 바꾼다."""
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -37,10 +38,8 @@ def agents(monkeypatch):
     return fakes
 
 
-@pytest.fixture
-def app(make_tools, make_posting):
-    tools = make_tools(**{n: [] for n in ALL_TOOLS})
-    tools["get_job_posting"].response = lambda a: make_posting(id=a["id"], title=f"공고{a['id']}")
+def _build_app(tools):
+    """tools로 supervisor 그래프를 만든다. 하위 그래프를 바꾼 뒤에는 이걸 다시 불러야 새 그래프가 반영된다."""
     graph = supervisor.make_graph(tools, checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "t"}}
 
@@ -48,6 +47,13 @@ def app(make_tools, make_posting):
         out = await graph.ainvoke(supervisor.input_to_agent_state(text), config)
         return out
     return SimpleNamespace(graph=graph, tools=tools, turn=turn)
+
+
+@pytest.fixture
+def app(make_tools, make_posting):
+    tools = make_tools(**{n: [] for n in ALL_TOOLS})
+    tools["get_job_posting"].response = lambda a: make_posting(id=a["id"], title=f"공고{a['id']}")
+    return _build_app(tools)
 
 
 async def test_Agent가_필요없으면_reply로_바로_답한다(fake_llm, agents, app):
@@ -86,6 +92,77 @@ async def test_번호로_공고를_골라_기업분석_후_갭분석까지_이�
     assert gap_in["posting"]["id"] == 149 and gap_in["research_report"] == "리서치 리포트"
     text = out["messages"][-1].content
     assert "# 기업분석" in text and "# 내 프로필" in text   # 여러 Agent 결과를 묶어서 답함
+
+
+class RendezvousGraph(FakeGraph):
+    """다른 쪽 Agent가 시작될 때까지 기다리는 가짜 그래프. 순차로 실행되면 서로를 기다리다 타임아웃으로 실패한다."""
+
+    def __init__(self, result, my_started: asyncio.Event, other_started: asyncio.Event):
+        super().__init__(result)
+        self.my_started = my_started
+        self.other_started = other_started
+
+    async def ainvoke(self, state):
+        self.my_started.set()
+        await asyncio.wait_for(self.other_started.wait(), timeout=2)
+        return await super().ainvoke(state)
+
+
+async def test_기업분석과_갭분석을_한_단계에서_병렬로_실행하고_결과를_모두_보존한다(fake_llm, agents, app, monkeypatch):
+    research_started, gap_started = asyncio.Event(), asyncio.Event()
+    research_graph = RendezvousGraph({"report": "리서치 리포트", "answer": "리서치 리포트"}, research_started, gap_started)
+    gap_graph = RendezvousGraph({"answer": "갭 리포트"}, gap_started, research_started)
+    monkeypatch.setattr(company_research_graph, "make_graph", lambda tools: research_graph)
+    monkeypatch.setattr(profile_gap_graph, "make_graph", lambda tools: gap_graph)
+    app = _build_app(app.tools)   # 가짜 그래프를 바꿨으니 supervisor를 다시 만든다
+    fake_llm.set(Route, [
+        Route(next="company_research", parallel_with=["profile_gap"], posting_id=146, reason="둘 다 요청"),
+        Route(next="FINISH", reason="끝")])
+
+    out = await app.turn("146번 기업분석이랑 내 부족한 점 같이 알려줘")
+
+    assert app.tools["get_job_posting"].calls == [{"id": 146}]   # 공고는 한 번만 조회
+    assert sorted(o["agent"] for o in out["turn_outputs"]) == ["company_research", "profile_gap"]
+    assert out["steps"] == 2
+    text = out["messages"][-1].content
+    assert "# 기업분석" in text and "# 내 프로필" in text
+    assert out["research_report"] == "리서치 리포트" and out["gap_posting_id"] == 146
+
+
+async def test_job_search는_다른_Agent와_함께_실행하지_않는다(fake_llm, agents, app):
+    fake_llm.set(Route, [
+        Route(next="job_search", parallel_with=["company_research"], reason="검색+분석"),
+        Route(next="FINISH", reason="끝")])
+
+    await app.turn("공고 찾고 분석도 해줘")
+
+    assert len(agents.job.inputs) == 1
+    assert agents.research.inputs == []   # 공고가 정해지기 전이라 다음 단계로 미룬다
+
+
+async def test_병렬_대상_중_이미_실행한_Agent는_빼고_나머지만_실행한다(fake_llm, agents, app):
+    fake_llm.set(Route, [
+        Route(next="company_research", posting_id=146, reason="기업분석"),
+        Route(next="company_research", parallel_with=["profile_gap"], reason="갭도"),
+        Route(next="FINISH", reason="끝")])
+
+    await app.turn("146번 기업분석하고 갭도")
+
+    assert len(agents.research.inputs) == 1   # 이미 실행했으니 다시 안 돈다
+    assert len(agents.gap.inputs) == 1
+
+
+async def test_새_턴이_시작되면_이전_턴의_steps와_turn_outputs가_초기화된다(fake_llm, agents, app):
+    fake_llm.set(Route, [
+        Route(next="company_research", parallel_with=["profile_gap"], posting_id=146, reason="둘 다"),
+        Route(next="FINISH", reason="끝"),
+        Route(next="FINISH", reply="네", reason="잡담")])
+
+    await app.turn("146번 분석해줘")
+    out = await app.turn("고마워")
+
+    assert out["steps"] == 0 and out["turn_outputs"] == []
+    assert out["messages"][-1].content == "네"
 
 
 async def test_공고별_역량분석_결과를_세션에_보관한다(fake_llm, agents, app):

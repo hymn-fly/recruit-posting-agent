@@ -52,6 +52,7 @@ def make_graph(tools: dict):
             tools["search_profile"].ainvoke({"query": r.text, "limit": EVIDENCE_K})
             for r in state["requirements"]))
         evidence = [parse_mcp_tool_result(r) for r in results]
+        
         blocks = []
         for index, (req, requirement_evidence) in enumerate(zip(state["requirements"], evidence)):
             chunks = "\n".join(f"  - ({e['filename']}) {e['text']}" for e in requirement_evidence)

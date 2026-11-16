@@ -212,6 +212,7 @@ async def select_posting(sid: str, posting_id: int):
         row = await pool.fetchrow("SELECT j.id,j.title,j.url,j.location,j.deadline,j.min_years,j.responsibilities,j.required_qualifications,j.preferred_qualifications,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE j.id=$1", posting_id)
         if not row:
             raise HTTPException(404, "공고를 찾지 못했습니다.")
+        
         state = (await app.state.graph.aget_state(cfg)).values
         old = state.get("selected_posting") or {}
         update = {"selected_posting": jsonable_encoder(dict(row))}
@@ -220,6 +221,7 @@ async def select_posting(sid: str, posting_id: int):
             cached = await pool.fetchval("SELECT report_md FROM company_research WHERE posting_id=$1 ORDER BY created_at DESC LIMIT 1", posting_id)
             if cached:
                 update.update(research_report=cached, research_posting_id=posting_id)
+                
         # 세션 메모리에 없는 공고의 역량 분석은 DB에 저장된 것을 불러온다
         gap_reports = dict(state.get("gap_reports") or {})
         in_memory = state.get("gap_posting_id") == posting_id or str(posting_id) in gap_reports

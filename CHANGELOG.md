@@ -518,6 +518,21 @@
 - **변경**: `backend/api/main.py`, `frontend/components/Workspace.tsx`
 - **검증**: 기존 공고 선택 단위 테스트를 실행하고 라우트가 PUT만 허용하는지 확인.
 
+## 2026-11-16
+
+### #53 Supervisor에서 기업분석과 내 프로필 분석을 병렬(fan-out/fan-in)로 실행
+- **무엇을**: 공고가 정해진 뒤의 `company_research`와 `profile_gap`을 Supervisor가 한 단계에서 동시에 실행한다. 둘 다 끝나면 Supervisor가 한 번만 다시 실행된다.
+  - `Route.parallel_with`: `next`와 함께 동시에 실행할 Agent. `normalize_route_agents`가 이번 턴에 이미 실행한 Agent를 빼고, `job_search`는 공고를 정하는 단계라 항상 혼자 실행하도록 정리한다.
+  - `route_next`가 노드 이름 리스트를 반환해 LangGraph가 같은 superstep에서 함께 실행한다(`Send`는 입력이 다른 동적 인스턴스가 필요할 때만 쓰므로 불필요).
+  - `steps`/`turn_outputs`에 reducer(`accumulate_steps`, `accumulate_turn_outputs`)를 붙였다. 노드는 `state + 1`처럼 읽고 덮어쓰지 않고 자기 몫의 증분(`1`, `[{agent, text}]`)만 반환한다. 새 턴 시작은 `input_to_agent_state`가 `None`을 넣어 reducer가 초기화한다(턴 번호 키는 지난 턴 데이터가 쌓이기만 해서 쓰지 않았다).
+  - 라우터 프롬프트에 병렬 규칙을 추가했고, 규칙 줄 사이에 빠져 있던 개행을 넣었다.
+  - 진행 표시: 병렬이면 "기업분석 · 내 프로필 단계로 진행 (동시 실행)"으로 보낸다.
+  - 공백 줄만 바뀐 `profile_gap_graph.py`, `api/main.py`도 함께 커밋했다(동작 변경 없음).
+- **왜**: 기존에는 Agent 하나를 실행하고 Supervisor로 돌아가 다시 라우팅하는 순차 구조라, 공고만 정해지면 독립적으로 돌려도 되는 두 분석이 불필요하게 직렬로 걸렸다. 갭 분석의 목적은 공고 요구 역량 대비 내 부족한 점이므로 같은 단계의 기업분석 결과를 기다릴 필요가 없다.
+- **변경**: `backend/agents/state.py`, `backend/agents/graphs/supervisor.py`, `backend/tests/unit_tests/test_supervisor.py`, `backend/tests/unit_tests/test_turn_reducers.py`, `backend/agents/graphs/profile_gap_graph.py`, `backend/api/main.py`
+- **검증**: 단위 테스트 61개 통과. 두 Agent가 서로의 시작을 기다리는 가짜 그래프로 동시 실행을 확인(순차면 타임아웃), 병렬 결과 보존, `job_search` 단독 실행, 이미 실행한 Agent 제외, 새 턴 초기화, reducer 단위 테스트. 실제 LLM·브라우저에서의 병렬 동작은 확인하지 못했다.
+- **알아둘 점**: 병렬로 돌리면 `profile_gap`은 같은 단계에서 새로 만드는 `research_report`를 볼 수 없다. 같은 공고의 리포트가 이미 상태에 있을 때만 반영한다.
+
 ---
 
 ## 미해결 / 다음 후보

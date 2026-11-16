@@ -126,11 +126,36 @@ AgentName = Literal["job_search", "company_research", "profile_gap"]
 
 class Route(BaseModel):
     next: Literal["job_search", "company_research", "profile_gap", "FINISH"]
+    parallel_with: list[Literal["company_research", "profile_gap"]] = Field(
+        default_factory=list,
+        description="next와 같은 공고를 대상으로 '동시에' 실행할 Agent. 기업분석과 내 프로필 분석을 "
+                    "둘 다 요청했고 분석할 공고가 이미 정해졌을 때만 채운다. job_search와는 함께 쓰지 않는다")
     posting_number: Optional[int] = Field(None, description="사용자가 '2번 공고'처럼 추천 목록 번호로 가리키면 그 번호")
     posting_id: Optional[int] = Field(None, description="사용자가 공고 id를 직접 말하면 그 id")
     use_profile: bool = Field(False, description="job_search에서 '나한테 맞는'처럼 사용자 본인 경력 기준 검색을 원하면 true")
     reply: Optional[str] = Field(None, description="FINISH이면서 Agent 결과가 없을 때(인사/사용법 질문/공고 선택 요청 등) 사용자에게 할 말")
     reason: str = Field(description="이렇게 판단한 이유 한 줄")
+
+
+def accumulate_steps(current: Optional[int], update: Optional[int]) -> int:
+    """steps reducer: 노드가 돌려준 증분(보통 1)을 더한다. 병렬 노드가 동시에 1씩 돌려줘도 합이 맞다.
+
+    update가 None이면 새 턴의 시작이므로 0으로 초기화한다 (input_to_agent_state가 None을 넣는다).
+    """
+    if update is None:
+        return 0
+    return (current or 0) + update
+
+
+def accumulate_turn_outputs(current: Optional[list[dict]], update: Optional[list[dict]]) -> list[dict]:
+    """turn_outputs reducer: 병렬로 끝난 Agent들의 결과 [{agent, text}]를 한 리스트로 합친다.
+
+    - 노드는 "자기 결과만" 담은 리스트를 돌려준다 (state를 읽어 덧붙이지 않는다).
+    - update가 None이면 새 턴의 시작이므로 이전 턴 결과를 비운다. (accumulate_steps와 같은 규칙)
+    """
+    if update is None:
+        return []
+    return (current or []) + update
 
 
 class AppState(TypedDict, total=False):
@@ -143,8 +168,9 @@ class AppState(TypedDict, total=False):
     gap_posting_id: int         # gap_report 분석 대상 공고
     gap_reports: dict[str, str] # 공고 id별 역량 분석 결과 (세션 내 보관)
     route: dict                  # Route.model_dump()
-    steps: int                   # 이번 턴에 실행한 Agent 수 (턴마다 0으로 초기화)
-    turn_outputs: list[dict]     # 이번 턴 Agent 결과 [{agent, text}] (턴마다 초기화)
+    # 아래 둘은 병렬 Agent가 같은 단계에 함께 쓰므로 reducer로 합친다. 턴 시작 시 None을 넣으면 초기화된다.
+    steps: Annotated[int, accumulate_steps]                       # 이번 턴에 실행한 Agent 수
+    turn_outputs: Annotated[list[dict], accumulate_turn_outputs]  # 이번 턴 Agent 결과 [{agent, text}]
 
 
 class JobSearchState(TypedDict, total=False):
