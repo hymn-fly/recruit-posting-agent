@@ -1,6 +1,7 @@
 """사용자 입력·외부 전송 텍스트의 결정적 사전 검사."""
 import logging
 import re
+from urllib.parse import urlsplit
 
 from agents.guardrails.policy import (
     GUARDRAIL_POLICY,
@@ -59,105 +60,37 @@ def redact_sensitive_text(text: str, boundary: GuardrailBoundary) -> tuple[str, 
     return redacted_text, decision
 
 
-def validate_untrusted_content(
-    text: str,
-    boundary: GuardrailBoundary,
-    max_chars: int,
-) -> tuple[str, GuardrailDecision]:
-    """검색·문서 자료를 크기 제한하고 비밀값을 제거해 프롬프트에 넣는다."""
-    if len(text) > max_chars:
-        decision = GuardrailDecision(GuardrailAction.BLOCK, GuardrailReason.INPUT_TOO_LARGE, boundary=boundary)
-        return "", decision
-    
-    if any(pattern.search(text) for pattern in UNTRUSTED_INSTRUCTION_PATTERNS):
-        decision = GuardrailDecision(GuardrailAction.BLOCK, GuardrailReason.UNTRUSTED_CONTENT, boundary=boundary)
-        return "", decision
-    return redact_sensitive_text(text, boundary)
+def remove_evil_instruction_lines(text: str, boundary: GuardrailBoundary) -> str:
+    """모델에게 지시하는 문장으로 보이는 줄을 제거하고 제거한 줄 수만 로그에 남긴다."""
+    kept_lines = []
+    removed_line_count = 0
 
-
-def sanitize_material_text(value, max_chars: int = 8_000) -> str:
-    """문자열 자료만 검사하며 차단 자료는 원문 없이 제외한다."""
-    if not isinstance(value, str):
-        return ""
-    sanitized, decision = validate_untrusted_content(value, GuardrailBoundary.RETRIEVED_CONTENT, max_chars)
-    if not decision.allowed:
-        log.warning(
-            "event=guardrail_material_excluded reason=%s policy=%s",
-            decision.reason.value, decision.policy_version)
-    return sanitized
-
-
-def sanitize_material_url(value) -> str:
-    """출처는 HTTP(S) 주소만 허용하며 자격 증명과 제어 문자를 제외한다."""
-    from urllib.parse import urlsplit
-    sanitized = sanitize_material_text(value, 2_000)
-    try:
-        parsed = urlsplit(sanitized)
-        if (parsed.scheme not in ("http", "https") or not parsed.hostname
-                or parsed.username or parsed.password or any(ord(char) < 33 for char in sanitized)):
-            return ""
-    except ValueError:
-        return ""
-    return sanitized
-
-
-def sanitize_posting_material(posting) -> dict:
-    """공고의 알려진 필드만 복사해 원본과 다른 병렬 분석의 입력을 보존한다."""
-    if not isinstance(posting, dict):
-        return {}
-    sanitized = {field: sanitize_material_text(posting.get(field), 12_000)
-                 for field in ("company", "industry", "title", "location", "category", "deadline",
-                               "employment_type", "responsibilities", "required_qualifications",
-                               "preferred_qualifications")}
-    sanitized["url"] = sanitize_material_url(posting.get("url"))
-
-    # ID와 점수는 문자열로 강제 변환하지 않고 실제 수치만 유지한다.
-    for field in ("id", "min_years", "similarity", "sim_responsibilities", "sim_required", "sim_preferred"):
-        value = posting.get(field)
-        sanitized[field] = value if type(value) in (int, float) else None
-    return sanitized if type(sanitized.get("id")) is int and sanitized["id"] > 0 else {}
-
-
-def sanitize_profile_summary(summary) -> dict:
-    """프로필의 고정 필드만 검사하고 배열 크기와 각 항목 길이를 제한한다."""
-    if not isinstance(summary, dict):
-        return {}
-    sanitized = {}
-    for field in ("headline", "skills", "domains", "projects", "strengths", "total_years", "education_certs"):
-        value = summary.get(field)
-        if isinstance(value, str):
-            sanitized[field] = sanitize_material_text(value, 2_000)
-        elif field == "projects" and isinstance(value, list):
-            sanitized[field] = []
-            for project in value[:20]:
-                if not isinstance(project, dict):
-                    continue
-                cleaned = {key: sanitize_material_text(project.get(key), 2_000)
-                           for key in ("name", "role", "period")}
-                for key in ("tech", "achievements"):
-                    items = project.get(key)
-                    cleaned[key] = [text for item in items[:30]
-                                    if (text := sanitize_material_text(item, 2_000))] if isinstance(items, list) else []
-                if cleaned["name"]:
-                    sanitized[field].append(cleaned)
-        elif isinstance(value, list):
-            sanitized[field] = [text for item in value[:30]
-                                if (text := sanitize_material_text(item, 2_000))]
-        elif type(value) in (int, float):
-            sanitized[field] = value
-    return {field: value for field, value in sanitized.items() if value}
-
-
-def sanitize_sources(sources) -> list[dict]:
-    """출처 제목과 URL을 함께 검사하고 출처 순서를 유지한다."""
-    if not isinstance(sources, list):
-        return []
-    validated = []
-    for source in sources[:20]:
-        if not isinstance(source, dict):
+    # 지시문 패턴이 한 줄이라도 걸리면 그 줄 전체를 버린다.
+    for line in text.splitlines():
+        if any(pattern.search(line) for pattern in UNTRUSTED_INSTRUCTION_PATTERNS):
+            removed_line_count += 1
             continue
-        title = sanitize_material_text(source.get("title"), 500)
-        url = sanitize_material_url(source.get("url"))
-        if title and url:
-            validated.append({"title": title, "url": url})
-    return validated
+        kept_lines.append(line)
+
+    # 제거할 줄이 없으면 줄바꿈 형식까지 원문 그대로 돌려준다.
+    if removed_line_count == 0:
+        return text
+
+    log.warning("event=guardrail_instruction_removed boundary=%s removed_lines=%d policy=%s",
+                boundary, removed_line_count, GUARDRAIL_POLICY["version"])
+    return "\n".join(kept_lines)
+
+
+def is_http_url(value) -> bool:
+    """http(s) 주소인지만 판정한다. 자격 증명·공백·제어 문자가 있으면 거짓이다."""
+    if not isinstance(value, str):
+        return False
+
+    try:
+        parsed_url = urlsplit(value)
+    except ValueError:
+        return False
+
+    has_control_character = any(ord(character) < 33 for character in value)
+    return (parsed_url.scheme in ("http", "https") and bool(parsed_url.hostname)
+            and not parsed_url.username and not parsed_url.password and not has_control_character)

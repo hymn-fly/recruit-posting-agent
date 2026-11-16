@@ -73,7 +73,7 @@ async def test_Tavily_검색어_하나가_실패해도_나머지_결과로_요�
 
 
 async def test_회사_단위_토픽이_캐시에_있으면_role만_검색한다(fake_llm, make_tools, make_posting, fake_tavily):
-    cached = {"topics": [{"topic": t, "summary": f"{t} 캐시 [1]", "sources": [{"title": t, "url": f"u/{t}"}]}
+    cached = {"topics": [{"topic": t, "summary": f"{t} 캐시 [1]", "sources": [{"title": t, "url": f"https://news/{t}"}]}
                          for t in ("industry", "outlook", "competitors", "company", "role")]}
     tools = make_tools(get_cached_research=cached, save_research={"id": 2})
     fake_llm.set(ResearchPlan, _plan())

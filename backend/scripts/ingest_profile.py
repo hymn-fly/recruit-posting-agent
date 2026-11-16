@@ -21,7 +21,7 @@ from mcp_server.embeddings import embed_documents, text_hash, to_pg  # noqa: E40
 from agents.llm import LLM  # noqa: E402
 from agents.state import ProfileSummary  # noqa: E402
 from agents.guardrails.policy import GuardrailBoundary  # noqa: E402
-from agents.guardrails.validation import redact_sensitive_text  # noqa: E402
+from agents.guardrails.validation import redact_sensitive_text, remove_evil_instruction_lines  # noqa: E402
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
@@ -77,6 +77,9 @@ async def ingest(path: Path, kind: str) -> str:
         raise DocumentTextError("문서를 읽지 못했습니다. 파일 형식과 내용을 확인해 주세요.") from exc
     if not text:
         raise DocumentTextError("추출할 텍스트가 없습니다. 스캔 PDF는 텍스트 문서로 변환해 주세요.")
+
+    # 모델에게 지시하는 줄은 저장 전에 제거해 이후 단계가 프로필 원문을 그대로 신뢰하게 한다.
+    text = remove_evil_instruction_lines(text, GuardrailBoundary.PROFILE_DOCUMENT)
     text, _ = redact_sensitive_text(text, GuardrailBoundary.PROFILE_DOCUMENT)
 
     # 마스킹된 내용으로 변경 여부를 확인한 뒤 임베딩과 DB 저장을 진행한다.

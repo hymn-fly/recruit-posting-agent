@@ -39,6 +39,7 @@ class GuardrailBoundary(StrEnum):
     PROFILE_DOCUMENT = "profile_document"
     PROFILE_SUMMARY_EGRESS = "profile_summary_egress"
     RETRIEVED_CONTENT = "retrieved_content"
+    POSTING_COLLECTION = "posting_collection"
     LLM_EGRESS = "llm_egress"
     EMBEDDING_EGRESS = "embedding_egress"
     UNSPECIFIED = "unspecified"
