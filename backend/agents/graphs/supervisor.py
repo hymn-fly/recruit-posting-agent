@@ -10,6 +10,7 @@ import os
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
+from agents.guardrails.material_prompt import format_external_materials
 from agents.graphs import company_research_graph, job_search_graph, profile_gap_graph
 from agents.llm import LLM
 from agents.mcp_client import get_first_mcp_result
@@ -92,11 +93,11 @@ def make_graph(tools: dict, checkpointer=None):
             emit_progress("supervisor", f"route:{state.get('steps', 0)}", STATUS_DONE, "답변을 정리하는 중", next="FINISH")
             return {"route": Route(next="FINISH", reason="이번 턴 최대 실행 수 도달").model_dump()}
         
-        cands = "\n".join(f"{i}. [{c['company']}] {c['title']} (id={c['id']})"
-                          for i, c in enumerate(state.get("candidates") or [], 1)) or "(없음)"
+        cands = "\n".join(f"{i}. [{candidate['company']}] {candidate['title']} (id={candidate['id']})"
+                          for i, candidate in enumerate(state.get("candidates") or [], 1)) or "(없음)"
         sel = state.get("selected_posting")
         sel_text = f"[{sel['company']}] {sel['title']} (id={sel['id']})" if sel else "없음"
-        history = "\n".join(f"{'사용자' if isinstance(m, HumanMessage) else '시스템'}: {str(m.content)[:300]}"
+        history = "\n".join(f"{'사용자' if isinstance(m, HumanMessage) else '어시스턴트'}: {str(m.content)[:300]}"
                             for m in state["messages"][-HISTORY:])
         
         route = await router.ainvoke(
@@ -116,9 +117,8 @@ def make_graph(tools: dict, checkpointer=None):
             "- 선택된 공고도 없고 추천 목록만 있으면 FINISH하고 reply로 몇 번 공고인지 묻는다.\n"
             "- 실행한 Agent 결과로 요청이 충족됐으면 FINISH\n\n"
             f"이번 턴에 실행한 Agent: {done or '없음'}\n"
-            f"현재 추천 목록:\n{cands}\n"
-            f"선택된 공고: {sel_text}\n\n"
-            f"최근 대화:\n{history}")
+            f"최근 대화:\n{history}\n"
+            + format_external_materials(candidate_postings=cands, selected_posting=sel_text))
         
         route = normalize_route_agents(route, done)
 
@@ -133,7 +133,7 @@ def make_graph(tools: dict, checkpointer=None):
                     posting = get_first_mcp_result(await tools["get_job_posting"].ainvoke({"id": route.posting_id}))
                 except Exception:
                     posting = None
-            if posting:
+            if isinstance(posting, dict) and posting:
                 out["selected_posting"] = posting
             elif not sel:
                 out["route"] = Route(next="FINISH", reason="분석할 공고가 선택되지 않음",
@@ -161,7 +161,7 @@ def make_graph(tools: dict, checkpointer=None):
         except Exception as error:
             log.exception("event=job_search_failed")
             return {"steps": 1,
-                    "turn_outputs": _agent_output("job_search", f"⚠️ 채용공고 조회 실패: {error!r}"[:300])}
+                    "turn_outputs": _agent_output("job_search", f"⚠️ 채용공고 조회 실패")}
         log.info("event=job_search_done candidates=%d answer_chars=%d", len(res.get("candidates") or []), len(res.get("answer", "")))
         upd: AppState = {"steps": 1,
                          "turn_outputs": _agent_output("job_search", res["answer"])}
@@ -183,7 +183,7 @@ def make_graph(tools: dict, checkpointer=None):
         except Exception as error:
             log.exception("event=company_research_failed")
             return {"steps": 1,
-                    "turn_outputs": _agent_output("company_research", f"⚠️ 기업분석 실패: {error!r}"[:300])}
+                    "turn_outputs": _agent_output("company_research", f"⚠️ 기업분석 실패")}
         return {"steps": 1, "research_report": res["report"],
                 "research_posting_id": posting["id"],
                 "turn_outputs": _agent_output("company_research", res["answer"])}
@@ -196,7 +196,7 @@ def make_graph(tools: dict, checkpointer=None):
         except Exception as error:
             log.exception("event=profile_gap_failed")
             return {"steps": 1,
-                    "turn_outputs": _agent_output("profile_gap", f"⚠️ 내 프로필 분석 실패: {error!r}"[:300])}
+                    "turn_outputs": _agent_output("profile_gap", f"⚠️ 내 프로필 분석 실패")}
         reports = dict(state.get("gap_reports") or {})
         if state.get("gap_report") and state.get("gap_posting_id") is not None:
             reports[str(state["gap_posting_id"])] = state["gap_report"]

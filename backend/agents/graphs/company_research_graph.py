@@ -11,9 +11,12 @@ from langchain_tavily import TavilySearch
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+from agents.guardrails.material_prompt import format_external_materials
 from agents.llm import LLM
 from agents.mcp_client import get_first_mcp_result
 from agents.progress import STATUS_DONE, STATUS_START, emit_progress
+from agents.guardrails.policy import GuardrailBoundary
+from agents.guardrails.validation import is_http_url, remove_evil_instruction_lines
 from agents.state import COMPANY_TOPICS, ResearchPlan, ResearchState
 
 log = logging.getLogger(__name__)
@@ -32,12 +35,6 @@ TOPIC_TITLES = {
 
 
 
-def _posting_brief(posting: dict) -> str:
-    return (f"회사: {posting.get('company')} (산업: {posting.get('industry') or '미상'})\n"
-            f"공고: {posting.get('title')} / 직군: {posting.get('category')}\n"
-            f"하는 일: {(posting.get('responsibilities') or '-')[:800]}")
-
-
 def make_graph(tools: dict):
     _tavily: list[TavilySearch] = []   # TAVILY_API_KEY가 없어도 다른 Agent는 뜨도록 처음 쓸 때 만든다
 
@@ -52,14 +49,17 @@ def make_graph(tools: dict):
 
     async def plan_queries(state: ResearchState) -> ResearchState:
         emit_progress("company_research", "plan_queries", STATUS_START, "리서치 계획을 세우는 중")
+
+        posting = state["posting"]
         plan = await planner.ainvoke(
             "채용 지원자를 위한 기업분석 리서치 계획을 세워라. 먼저 실제 채용 법인/계열사(target_company)를 정한다 "
             "— 회사명이 그룹(SK, LG, 현대, 롯데, CJ 등)이면 제목·근무지·하는 일에 적힌 계열사가 대상이다. "
             "산업·경쟁사·검색어는 모두 그 계열사 기준으로 만든다. 아래 토픽마다 웹 검색어 2개를 만든다 "
             "(한국 기업이면 한국어 검색어, 최신 동향을 위해 연도 포함 가능).\n"
             + "\n".join(f"- {t}: {TOPIC_TITLES[t]}" for t in TOPIC_TITLES)
-            + f"\n\n{_posting_brief(state['posting'])}\n근무지: {state['posting'].get('location') or '-'}"
+            + format_external_materials(job_posting=posting)
         )
+
         log.info("event=plan_queries_done posting_id=%s company=%r title=%r target_company=%r industry=%r "
                  "competitors=%s topic_queries=%s",
                  state["posting"].get("id"), state["posting"].get("company"), state["posting"].get("title"),
@@ -67,15 +67,37 @@ def make_graph(tools: dict):
                  {t.topic: t.queries for t in plan.topics})
         emit_progress("company_research", "plan_queries", STATUS_DONE, f"조사 대상: {plan.target_company}",
                       target_company=plan.target_company)
+
         return {"plan": plan}
+
 
     async def load_cache(state: ResearchState) -> ResearchState:
         emit_progress("company_research", "load_cache", STATUS_START, "이전 리서치 결과를 확인하는 중")
-        cache_lookup_args = {"company_name": state["posting"]["company"],
-                             "target_company": state["plan"].target_company, "max_age_days": CACHE_DAYS}
+
+        cache_lookup_args = {
+            "company_name": state["posting"]["company"],
+            "target_company": state["plan"].target_company,
+            "max_age_days": CACHE_DAYS
+        }
         cached = get_first_mcp_result(await tools["get_cached_research"].ainvoke(cache_lookup_args))
 
-        cached_company_topics = [t for t in cached.get("topics", []) if t["topic"] in COMPANY_TOPICS]
+        cached_company_topics = []
+        cached = cached if isinstance(cached, dict) else {}
+        cached_topics = cached.get("topics", [])
+        for topic in (cached_topics[:5] if isinstance(cached_topics, list) else []):
+            if not isinstance(topic, dict) or topic.get("topic") not in COMPANY_TOPICS:
+                continue
+            summary = str(topic.get("summary") or "")
+            sources = topic.get("sources")
+
+            # 출처 형식이 맞지 않으면 인용 번호가 어긋나므로 토픽 전체를 다시 검색한다.
+            sources_are_valid = (isinstance(sources, list) and bool(sources)
+                                 and all(isinstance(source, dict) and source.get("title") and is_http_url(source.get("url"))
+                                         for source in sources))
+            if summary and sources_are_valid:
+                cached_company_topics.append({"topic": topic["topic"], "summary": summary, "sources": sources})
+
+
         log.info("event=load_cache_done lookup=%s cache_hit=%s research_id=%s cached_at=%s reused_topics=%s",
                  cache_lookup_args, bool(cached), cached.get("id"), cached.get("created_at"),
                  [t["topic"] for t in cached_company_topics])
@@ -84,11 +106,19 @@ def make_graph(tools: dict):
                       reused_topics=len(cached_company_topics))
         return {"cached": cached_company_topics}
 
+
     def fan_out(state: ResearchState):
         done = {c["topic"] for c in state["cached"]}
-        sends = [Send("search_topic", {"posting": state["posting"], "plan": state["plan"],
-                                       "topic": t.topic, "queries": t.queries})
+        sends = [
+            Send("search_topic",
+                {
+                    "posting": state["posting"],
+                    "plan": state["plan"],
+                    "topic": t.topic,
+                    "queries": t.queries
+                })
                  for t in state["plan"].topics if t.topic not in done]
+        
         log.info("event=fan_out topics_to_search=%s", [s.arg["topic"] for s in sends])
         return sends or ["synthesize"]
 
@@ -109,14 +139,23 @@ def make_graph(tools: dict):
                 log.warning("event=search_topic_tavily_failed topic=%s query=%r error_type=%s error=%r",
                             topic, query, type(response).__name__, str(response)[:200])
                 continue
+            
             results = response.get("results", []) if isinstance(response, dict) else []
+            results = results[:RESULTS_PER_QUERY] if isinstance(results, list) else []
+            results = [item for item in results if isinstance(item, dict)]
             log.info("event=search_topic_query topic=%s query=%r results=%d urls=%s", topic, query, len(results),
-                     [r["url"] for r in results])
+                     [r.get("url") for r in results])
+            
             for item in results:
+                if not is_http_url(item.get("url")):
+                    continue
+
                 if item["url"] not in seen_urls:
                     seen_urls.add(item["url"])
-                    sources.append({"title": item.get("title", ""), "url": item["url"],
-                                    "content": (item.get("content") or "")[:SNIPPET_LEN]})
+                    title = remove_evil_instruction_lines(str(item.get("title") or ""), GuardrailBoundary.RETRIEVED_CONTENT)
+                    content = remove_evil_instruction_lines(str(item.get("content") or ""), GuardrailBoundary.RETRIEVED_CONTENT)
+                    if content:
+                        sources.append({"title": title, "url": item["url"], "content": content})
 
         if not sources:
             log.warning("event=search_topic_no_results topic=%s outcome=unverified", topic)
@@ -127,11 +166,11 @@ def make_graph(tools: dict):
         plan = arg["plan"]
         msg = await summarizer.ainvoke(
             f"주제 '{TOPIC_TITLES[topic]}'에 대해 아래 검색 결과만 근거로 핵심을 한국어 bullet 5~8개로 요약하라. "
-            "각 bullet 끝에 근거 출처 번호를 [n]으로 단다. 검색 결과에 없는 내용은 쓰지 않는다. "
+            "각 bullet 끝에 web_results의 source_id를 근거 출처 번호 [n]으로 단다. 검색 결과에 없는 내용은 쓰지 않는다. "
             "수치·연도는 출처에 적힌 그대로.\n"
-            f"분석 대상: {plan.target_company} / 산업: {plan.industry} / 경쟁사: {', '.join(plan.competitors)}\n"
-            f"{_posting_brief(arg['posting'])}\n\n"
-            + "\n\n".join(f"[{i}] {s['title']} ({s['url']})\n{s['content']}" for i, s in enumerate(sources, 1)))
+            + format_external_materials(
+                research_plan=plan.model_dump(), job_posting=arg["posting"],
+                web_results=[{"source_id": index, **source} for index, source in enumerate(sources, 1)]))
         log.info("event=search_topic_done topic=%s sources=%d summary_chars=%d", topic, len(sources), len(msg.text))
         emit_progress("company_research", topic_step, STATUS_DONE, f"{TOPIC_TITLES[topic]} 조사 완료 (출처 {len(sources)}건)",
                       source_count=len(sources))
@@ -161,9 +200,8 @@ def make_graph(tools: dict):
             "구체적 아이디어 3~5개, 면접·자소서에서 쓸 수 있게) / ## 한 줄 요약.\n"
             "모든 사실 문장에는 요약에 있는 출처 번호 [n]을 그대로 유지한다. 근거가 없으면 '확인 불가'라고 쓴다. "
             "기여 아이디어는 근거를 바탕으로 한 제안임을 분명히 한다. 3500자 이내.\n\n"
-            f"분석 대상 회사: {plan.target_company} (채용 포털: {posting['company']}) / 산업: {plan.industry}\n"
-            f"{_posting_brief(posting)}\n필수 역량: {(posting.get('required_qualifications') or '-')[:600]}\n\n"
-            + "\n\n".join(blocks))
+            + format_external_materials(research_plan=plan.model_dump(), job_posting=posting,
+                                        research_summaries="\n\n".join(blocks), sources=all_sources))
         cited = {int(n) for n in re.findall(r"\[(\d+)\]", msg.text)}   # 본문에 인용된 출처만 목록에 남긴다
         refs = "\n".join(f"[{i}] {s['title']} — {s['url']}"
                          for i, s in enumerate(all_sources, 1) if i in cited)

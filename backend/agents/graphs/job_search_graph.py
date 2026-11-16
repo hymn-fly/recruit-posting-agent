@@ -12,6 +12,7 @@ import time
 
 from langgraph.graph import END, START, StateGraph
 
+from agents.guardrails.material_prompt import format_external_materials
 from agents.llm import LLM
 from agents.mcp_client import parse_mcp_tool_result
 from agents.progress import STATUS_DONE, STATUS_START, emit_progress
@@ -98,8 +99,8 @@ def make_graph(tools: dict):
         emit_progress("job_search", "plan", STATUS_START, "검색 조건을 만드는 중")
         search_plan = await planner.ainvoke(
             PLAN_PROMPT
-            + f"사용자 프로필 요약: {state.get('profile') or '(없음)'}\n"
-            + f"요청: {state['question']}")
+            + f"요청: {state['question']}\n"
+            + format_external_materials(profile_summary=state.get("profile") or "(없음)"))
         log.info("event=plan_done search_params=%s",
                  json.dumps(search_plan.model_dump(exclude_none=True), ensure_ascii=False))
         emit_progress("job_search", "plan", STATUS_DONE, "검색 조건 생성 완료")
@@ -118,7 +119,8 @@ def make_graph(tools: dict):
             log.exception("event=retrieve_failed elapsed_seconds=%.2f", time.perf_counter() - started)
             raise
         log.info("event=retrieve_tool_done elapsed_seconds=%.2f raw_type=%s", time.perf_counter() - started, type(raw).__name__)
-        results = parse_mcp_tool_result(raw)
+        results = [posting for posting in parse_mcp_tool_result(raw)[:TOP_K]
+                   if isinstance(posting, dict) and posting.get("company") and posting.get("title")]
         if not results:
             log.warning("event=retrieve_empty tool_result=%s", repr(raw)[:1000])
         log.info("event=retrieve_done results=%d", len(results))
@@ -167,9 +169,10 @@ def make_graph(tools: dict):
             "요청 조건에 약하게만 맞으면 reason에 그 한계를 적는다. "
             "판단 근거는 공고의 하는 일·필수/우대 역량과 deadline 필드에 실제로 적힌 내용만 쓴다. 후보에 없는 id는 쓰지 않는다.\n"
             + deadline_order_rule + "\n"
-            f"사용자 프로필 요약: {state.get('profile') or '(없음)'}\n"
-            f"요청: {state['question']}\n\n"
-            f"후보(JSON):\n{json.dumps([_brief(r) for r in state['results']], ensure_ascii=False)}")
+            f"요청: {state['question']}\n"
+            + format_external_materials(
+                profile_summary=state.get("profile") or "(없음)",
+                job_postings=[_brief(record) for record in state["results"]]))
         by_id = {r["id"]: r for r in state["results"]}
         candidates = [{**by_id[pick.id], "reason": pick.reason} for pick in ranking.picks if pick.id in by_id][:pick_count]
         log.info("event=rerank_done picked_ids=%s", [c["id"] for c in candidates])
