@@ -20,12 +20,18 @@ from mcp_server import db  # noqa: E402
 from mcp_server.embeddings import embed_documents, text_hash, to_pg  # noqa: E402
 from agents.llm import LLM  # noqa: E402
 from agents.state import ProfileSummary  # noqa: E402
+from agents.guardrails.policy import GuardrailBoundary  # noqa: E402
+from agents.guardrails.validation import redact_sensitive_text  # noqa: E402
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 SUMMARY_MAX_CHARS = 60_000
 
 logging.basicConfig(level=logging.WARNING)
+
+
+class DocumentTextError(ValueError):
+    """문서에서 적재할 텍스트를 추출하지 못했다."""
 
 
 def extract_text(path: Path) -> str:
@@ -64,9 +70,16 @@ def chunk(text: str) -> list[str]:
 
 
 async def ingest(path: Path, kind: str) -> str:
-    text = extract_text(path)
+    # API와 CLI의 문서 입력은 청킹·해시·저장 전에 여기서 한 번 검사한다.
+    try:
+        text = await asyncio.to_thread(extract_text, path)
+    except Exception as exc:
+        raise DocumentTextError("문서를 읽지 못했습니다. 파일 형식과 내용을 확인해 주세요.") from exc
     if not text:
-        return f"{path.name}: 추출된 텍스트 없음 (스캔 PDF라면 OCR 필요) — 건너뜀"
+        raise DocumentTextError("추출할 텍스트가 없습니다. 스캔 PDF는 텍스트 문서로 변환해 주세요.")
+    text, _ = redact_sensitive_text(text, GuardrailBoundary.PROFILE_DOCUMENT)
+
+    # 마스킹된 내용으로 변경 여부를 확인한 뒤 임베딩과 DB 저장을 진행한다.
     content_hash = text_hash(text)
     connection_pool = await db.pool()
     old = await connection_pool.fetchrow("SELECT id, content_hash FROM profile_documents WHERE filename = $1", path.name)
@@ -97,9 +110,10 @@ async def summarize() -> dict | None:
         await connection_pool.execute("DELETE FROM profile_summary")
         return None
     corpus = "\n\n".join(f"=== [{d['kind']}] {d['filename']} ===\n{d['raw_text']}" for d in docs)
+    corpus = corpus[:SUMMARY_MAX_CHARS]
     profile_summary_model = await LLM(schema=ProfileSummary, primary_timeout=60).ainvoke(
         "아래는 한 사람의 이력서·경력기술서·포트폴리오다. 문서에 적힌 사실만으로 구조화 프로필을 만들어라. "
-        "추측하거나 과장하지 말고, 성과 수치는 문서 표현 그대로 옮긴다.\n\n" + corpus[:SUMMARY_MAX_CHARS])
+        "추측하거나 과장하지 말고, 성과 수치는 문서 표현 그대로 옮긴다.\n\n" + corpus)
     summary = profile_summary_model.model_dump()
     await connection_pool.execute(
         """INSERT INTO profile_summary (id, summary) VALUES (1, $1::jsonb)
@@ -118,7 +132,11 @@ async def main():
         arg_parser.error("파일을 지정하거나 --summary-only를 쓰세요")
     changed = False
     for file_path in args.files:
-        msg = await ingest(file_path, args.kind)
+        try:
+            msg = await ingest(file_path, args.kind)
+        except DocumentTextError as exc:
+            print(f"{file_path.name}: {exc} — 건너뜀")
+            continue
         changed |= "건너뜀" not in msg
         print(msg)
     if changed or args.summary_only:

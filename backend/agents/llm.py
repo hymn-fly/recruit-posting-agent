@@ -10,6 +10,8 @@ import time
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
+from agents.guardrails.policy import GuardrailBoundary
+from agents.guardrails.validation import redact_sensitive_text
 
 log = logging.getLogger("agents.llm")
 
@@ -51,6 +53,7 @@ class LLM:
             self._fallback = self._fallback.with_structured_output(schema)
 
     async def ainvoke(self, prompt: str):
+        prompt, _ = redact_sensitive_text(prompt, GuardrailBoundary.LLM_EGRESS)
         started = time.perf_counter()
         log.info("event=llm_start schema=%s primary=%s prompt_chars=%d", self.schema_name, self.primary_name, len(prompt))
         try:

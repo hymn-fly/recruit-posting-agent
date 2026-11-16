@@ -539,7 +539,40 @@
 - **변경**: `docs/guardrail-application-plan.md`, `docs/guardrail-application-map.svg`, `CHANGELOG.md`. 실행 코드 변경 없이 설계안만 추가했다.
 - **검증**: 문서 내 상대 파일 링크·이미지 경로, Mermaid 블록 경계, SVG XML·크기·G1~G5 식별자, 채팅 시각화 HTML의 스크립트 구문과 연결된 식별자를 검사했다. 브라우저 접근 호스트가 없어 화면 표시와 클릭 동작은 직접 확인하지 못했다. 실제 가드레일 구현·보안 테스트는 수행하지 않았다.
 
+### #55 가드레일 공통 정책 기반 추가
+- **무엇을**: `agents.guardrails` 패키지에 정책 버전, 단계별 초기 한도, `GuardrailAction`·`GuardrailReason`·`GuardrailDecision`, `GuardrailViolation`, 차단 판정 집행 함수 `require_guardrail_allow`를 추가했다.
+- **왜**: 입력·자료·외부 전송·도구 실행·출력 단계가 같은 판정과 정책 위반 처리를 공유하도록 하기 위해.
+- **변경**: `backend/agents/guardrails/__init__.py`, `backend/agents/guardrails/policy.py`, `CHANGELOG.md`
+- **검증**: 실행 테스트는 하지 않았다. 기존 12,000자 메시지·20MB 업로드 한도와 계획 문서의 검색·프로필·출력 한도를 기본 정책값에 반영했다. 정책 위반은 별도 예외로 전달해 일반 장애 및 모델 폴백과 구분할 기반을 만들었다.
+- **범위**: 아직 검사 함수를 호출하는 단계가 없어 실제 입력·도구·전송·저장·출력은 차단되지 않는다. 정책 검사 연결은 다음 단계에서 적용한다.
+
+### #56 가드레일 경계 이름을 StrEnum으로 고정
+- **무엇을**: `GuardrailBoundary`를 추가하고 판정 결과·텍스트 검사 함수의 경계 타입에 사용했다. API, CLI, 문서, LLM, 임베딩 호출부도 enum 멤버를 전달한다.
+- **왜**: 경계 이름 오타를 줄이고 검사 위치를 정해진 값으로 일관되게 기록하기 위해.
+- **변경**: `backend/agents/guardrails/policy.py`, `backend/agents/guardrails/__init__.py`, `backend/agents/guardrails/validation.py`, API·CLI·문서 적재·LLM·임베딩 호출부.
+- **검증**: 테스트는 실행하지 않았다. `rg`로 검사 함수 호출이 모두 `GuardrailBoundary` 멤버를 사용하는 것을 확인했다.
+
 ---
+
+## 2026-11-16
+
+### #59 입력·요약 경로의 중복 마스킹 제거
+- **무엇을**: 일반·SSE 채팅의 입력 마스킹을 `run_chat_turn()`으로, API·CLI 문서의 마스킹과 판정 로그를 `ingest()`로 모았다. 업로드 API의 중복 마스킹·임시 파일 덮어쓰기와 `summarize()`의 LLM 호출 직전 마스킹을 제거했다.
+- **왜**: 같은 입력을 연속해서 검사하는 비용과 중복 로그를 줄이면서 문서 청킹·해시·DB 저장 전 보호 및 최종 LLM·임베딩 전송 검사는 유지하기 위해. G2의 구조·길이·지시문 검사는 그대로 유지한다.
+- **변경**: `backend/api/main.py`, `backend/scripts/ingest_profile.py`, `backend/tests/unit_tests/test_redaction_boundaries.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 82개 통과. 일반·SSE 채팅의 단일 마스킹, 업로드 텍스트 전달, API·CLI 문서 해시 전 마스킹, 실제 `LLM.ainvoke()` 래퍼에서 파일명·본문을 포함한 최종 프롬프트의 단일 마스킹을 확인했다. 실제 외부 서비스 호출은 수행하지 않았다.
+
+### #60 마스킹 판정 로그를 검사 함수로 통합
+- **무엇을**: `redact_sensitive_text()`가 허용·마스킹·길이 초과 차단 판정을 같은 형식으로 한 번 기록하도록 변경하고 채팅·문서 적재·LLM 호출부의 판정 로그를 제거했다. 차단은 로그를 기록한 뒤 기존 예외를 발생시킨다.
+- **왜**: 판정 생성과 기록을 한곳에서 관리해 호출부 중복과 로그 누락을 막기 위해. 임베딩 등 기존에 반환 판정을 버리던 호출도 로그가 남으며 원문·탐지값은 기록하지 않는다.
+- **변경**: `backend/agents/guardrails/validation.py`, `backend/api/main.py`, `backend/agents/llm.py`, `backend/scripts/ingest_profile.py`, `backend/tests/unit_tests/test_redaction_boundaries.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 108개 통과. 모든 경계의 허용·개인정보·비밀값 판정, 차단 예외 전 로그 기록, 일반·SSE 채팅의 로그 중복 방지와 원문 미포함을 검증했다. 변경한 추적 파일의 `git diff --check` 통과.
+
+### #61 문서 추출·검사를 ingest로 통합
+- **무엇을**: `ingest(path, kind)`가 파일에서 텍스트를 추출하고 빈 내용 검사·마스킹을 수행하도록 정리했다. 업로드 API의 외부 텍스트 추출 및 `extracted_text` 전달을 제거했다. 추출은 작업 스레드에서 실행한다.
+- **왜**: 파일 입력 경로를 한 곳으로 모아 중복 추출과 잘못된 인자 전달을 없애기 위해. 문서 읽기 실패·빈 내용은 `DocumentTextError`로 구분해 API의 기존 422 응답을 유지하고, DB·임베딩 오류와 혼동하지 않는다. CLI는 읽을 수 없거나 빈 문서를 안내 후 건너뛴다.
+- **변경**: `backend/scripts/ingest_profile.py`, `backend/api/main.py`, `backend/tests/unit_tests/test_redaction_boundaries.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 109개 통과. 원본 파일 전달, 단일 텍스트 추출, 해시 전 마스킹, 빈 문서·읽기 실패 시 422 및 DB·요약 미호출을 확인했다. 관련 코드에서 `extracted_text` 참조가 없으며 변경한 추적 파일의 `git diff --check` 통과.
 
 ## 미해결 / 다음 후보
 - Gemma가 거의 항상 타임아웃 → 서킷 브레이커로 낭비는 줄였지만(#15), 기본 모델 교체 검토는 여전히 필요

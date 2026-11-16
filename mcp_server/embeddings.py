@@ -7,6 +7,8 @@ import logging
 from typing import Optional
 
 from langchain_openai import OpenAIEmbeddings
+from agents.guardrails.validation import redact_sensitive_text
+from agents.guardrails.policy import GuardrailBoundary
 
 log = logging.getLogger("mcp_server.embeddings")
 
@@ -28,6 +30,7 @@ def _client() -> OpenAIEmbeddings:
 
 async def embed_documents(texts: list[str]) -> list[list[float]]:
     """저장할 문서(공고·이력서 청크) 임베딩. BATCH개씩 나눠 보낸다."""
+    texts = [redact_sensitive_text(text, GuardrailBoundary.EMBEDDING_EGRESS)[0] for text in texts]
     embedded_vectors: list[list[float]] = []
     for start in range(0, len(texts), BATCH):
         embedded_vectors += await _client().aembed_documents(texts[start:start + BATCH])
@@ -36,6 +39,7 @@ async def embed_documents(texts: list[str]) -> list[list[float]]:
 
 async def embed_query(text: str) -> list[float]:
     """검색 질의 임베딩. OpenAI는 문서/질의 구분(task_type)이 없어 같은 방식으로 임베딩한다."""
+    text, _ = redact_sensitive_text(text, GuardrailBoundary.EMBEDDING_EGRESS)
     return await _client().aembed_query(text)
 
 

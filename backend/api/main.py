@@ -17,9 +17,10 @@ from pydantic import BaseModel, Field
 from common.observability import configure_logging, request_id
 from agents.graphs.supervisor import make_graph, input_to_agent_state
 from agents.mcp_client import open_tools
+from agents.guardrails.policy import GUARDRAIL_POLICY
 from agents.progress import STATUS_START, emit_progress, iter_progress, progress_sink
 from mcp_server import db
-from scripts.ingest_profile import extract_text, ingest, summarize
+from scripts.ingest_profile import DocumentTextError, ingest, summarize
 
 log = logging.getLogger(__name__)
 sessions: dict[str, asyncio.Lock] = {}
@@ -110,12 +111,13 @@ async def get_session(sid: str):
 
 
 class Message(BaseModel):
-    text: str = Field(min_length=1, max_length=12000)
+    text: str = Field(min_length=1, max_length=GUARDRAIL_POLICY["input"]["max_message_chars"])
 
 
 async def run_chat_turn(sid: str, text: str, started: float) -> dict:
     """세션 락을 잡은 상태에서 한 턴을 실행하고 최종 snapshot을 돌려준다."""
     cfg = config(sid)
+    # 일반 응답과 SSE가 공유하는 진입점에서 입력을 한 번 검사한다.
     log.info("event=chat_start session=%s lock_wait_seconds=%.2f", sid, time.perf_counter() - started)
     try:
         # 1) Agent 그래프 실행
@@ -344,12 +346,9 @@ async def upload(file: UploadFile = File(...), kind: str = Form(...)):
             path = Path(tmp) / name
             path.write_bytes(content)
             try:
-                text = await asyncio.to_thread(extract_text, path)
-            except Exception as exc:
-                raise HTTPException(422, "문서를 읽지 못했습니다. 파일 형식과 내용을 확인해 주세요.") from exc
-            if not text:
-                raise HTTPException(422, "추출할 텍스트가 없습니다. 스캔 PDF는 텍스트 문서로 변환해 주세요.")
-            result = await ingest(path, kind)
+                result = await ingest(path, kind)
+            except DocumentTextError as exc:
+                raise HTTPException(422, str(exc)) from exc
             try:
                 await summarize()
             except Exception as exc:
