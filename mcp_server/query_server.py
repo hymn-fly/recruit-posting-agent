@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 sys.path[:0] = [str(Path(__file__).resolve().parent.parent), str(Path(__file__).resolve().parent.parent / "backend")]
 
 from common.observability import configure_logging  # noqa: E402
+from common.schemas import JobPosting  # noqa: E402
 
 log = logging.getLogger(__name__ if __name__ != "__main__" else "mcp_server.query_server")
 
@@ -178,7 +179,7 @@ async def semantic_search_jobs(title_keywords: Optional[list[str]] = None,
 
 
 @mcp.tool()
-async def get_job_posting(id: int) -> dict:
+async def get_job_posting(id: int) -> JobPosting:
     """공고 1건 전체(하는 일/필수/우대 역량)와 회사·산업 정보."""
     connection_pool = await pool()
     row = await connection_pool.fetchrow(
@@ -189,7 +190,8 @@ async def get_job_posting(id: int) -> dict:
            FROM job_postings j JOIN companies c ON c.id = j.company_id WHERE j.id = $1""", id)
     if row is None:
         raise ValueError(f"공고 없음: id={id}")
-    return _row(row)
+
+    return JobPosting.model_validate(dict(row))
 
 
 @mcp.tool()

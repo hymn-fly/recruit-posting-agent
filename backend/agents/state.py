@@ -161,7 +161,7 @@ def accumulate_turn_outputs(current: Optional[list[dict]], update: Optional[list
 class AppState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     candidates: list[dict]       # 최근 job_search 추천 목록 (번호 = 인덱스+1)
-    selected_posting: dict       # 분석 대상 공고 (get_job_posting 결과)
+    selected_posting: dict       # 분석 대상 공고 (common.schemas.JobPosting.model_dump(mode="json"))
     research_report: str         # selected_posting 기준 기업분석 리포트
     research_posting_id: int     # research_report가 어느 공고 기준인지
     gap_report: str

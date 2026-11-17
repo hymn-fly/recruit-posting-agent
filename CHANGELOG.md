@@ -617,6 +617,34 @@
 - **검증**: `LANGSMITH_TRACING=true`/`false`로 `langsmith.utils.tracing_is_enabled()`가 각각 True/False, 프로젝트명 `make-agents`로 인식되는 것을 확인했다. 실제 trace 전송은 API 키가 필요해 아직 확인하지 않았다.
 - **범위**: MCP 서버는 stdio 자식 프로세스라 서버 내부 동작(DB 쿼리 등)은 trace에 잡히지 않고, 메인 프로세스의 tool 호출 입출력만 잡힌다. 이력서·경력기술서 원문이 LangSmith로 전송될 수 있다.
 
+### #66 `select_posting`의 DB 왕복 3회를 1회로 통합
+- **무엇을**: 공고+회사 조회, 기업 분석 캐시 조회, 역량 분석 조회를 `SELECT_POSTING_WITH_SAVED_REPORTS_SQL` 하나로 합치고 `get_posting_with_saved_reports()`로 분리했다. 세션 상태(메모리)를 먼저 읽어 `posting_changed`/`gap_report_in_memory`를 계산한 뒤 파라미터 `$2`/`$3`으로 넘기고, false면 해당 서브쿼리는 테이블을 읽지 않는다. 보고서는 `LEFT JOIN` 대신 상관 서브쿼리로 가져와 `company_research`에 같은 공고의 행이 여러 개여도 공고 행이 중복되지 않고 최신 1건만 쓴다. 공고 객체에 섞이지 않도록 보고서 컬럼은 `pop`으로 분리한다.
+- **왜**: 공고를 선택할 때마다 순차 DB 왕복이 최대 3번(Neon 원격 DB라 왕복당 지연이 큼)이었다. 기존의 "공고가 바뀔 때만 / 세션 메모리에 없을 때만 조회" 동작은 그대로 유지한다.
+- **변경**: `backend/api/main.py`, `backend/tests/unit_tests/test_api_gap_reports.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 110개 통과, 3개 실패(`redact_sensitive_text` 관련 기존 실패, 이번 변경과 무관). 테스트에서 DB 1회 왕복, 세션 메모리에 있는 역량 분석은 조회하지 않음(`need_gap=False`), 보고서 컬럼이 `selected_posting`에 섞이지 않음을 확인했다. 실제 DB에서 (false,false)는 보고서 NULL, (true,true)는 보고서 본문 반환, 없는 id는 None임을 읽기 전용 쿼리로 확인했다.
+- **범위**: 세션 상태 조회(`aget_state`)가 공고 존재 확인보다 먼저 실행된다(InMemorySaver라 DB 왕복 아님). `snapshot()`, 다른 엔드포인트의 쿼리는 바꾸지 않았다.
+
+### #67 공고·저장 보고서 조회 결과를 Pydantic 모델로 명시
+- **무엇을**: `PostingWithSavedReports`에 SELECT 결과의 13개 필드와 nullable 타입을 명시했다. `get_posting_with_saved_reports()`는 DB 행을 모델로 검증해 반환하며 공고가 없으면 None을 반환한다. 호출부는 보고서를 속성으로 읽고, 공고 상태는 보고서 필드를 제외해 JSON 호환 딕셔너리로 변환한다.
+- **왜**: 함수가 반환하는 필드·타입을 한 곳에서 확인하고 dict 키 접근·pop에 의존하지 않도록 하기 위해. 마감일은 모델 내부에서 date로, 세션 상태에서는 기존처럼 날짜 문자열로 유지한다.
+- **변경**: `backend/api/schemas.py`, `backend/api/main.py`, `backend/tests/unit_tests/test_api_gap_reports.py`, `CHANGELOG.md`. 기존 `common/schemas.py` 작업은 변경하지 않았다.
+- **검증**: `uv run pytest backend/tests/unit_tests/test_api_gap_reports.py -q` — 4개 통과. 모델·None 반환, nullable 필드, 날짜 직렬화, 보고서 필드 제외, DB 1회 조회와 기존 세션 보고서 복원을 확인했다. 실제 DB 호출은 수행하지 않았다.
+
+### #68 공고 스키마를 `common/schemas.py`로 공통화하고 `get_job_posting`이 모델을 반환하도록 변경
+- **무엇을**: `common/schemas.py`에 `JobPostingBase`(목록 공통 9필드) → `JobPosting`(상세 15필드)를 두고 필드마다 `description`을 달았다. `query_server.get_job_posting`은 `dict` 대신 `JobPosting`을 반환하며(`outputSchema`가 tool에 붙는다), supervisor는 MCP 결과를 `parse_job_posting_to_state_dict()`로 검증한 뒤 JSON dict로 상태에 저장한다(#69에서 `fetch_job_posting_by_id()`로 대체). `api/schemas.py`의 `PostingWithSavedReports`는 공고 필드를 다시 선언하지 않고 `JobPosting`을 상속해 보고서 2개만 추가하며, 그 SQL은 `employment_type/category/posted_at/is_active`까지 조회한다.
+- **왜**: 같은 "공고"가 `get_job_posting`(15필드)·`select_posting`(11필드)·검색·목록으로 모양이 제각각이고 키 이름이 문자열로만 존재해, 컬럼을 바꿀 때 누락해도 에러 없이 필드가 사라졌다. 이제 `selected_posting`은 어느 경로(화면 선택/supervisor 조회)로 들어와도 같은 15필드이며, 스키마가 어긋나면 supervisor 경계에서 `ValidationError`로 드러난다.
+- **변경**: `common/schemas.py`, `mcp_server/query_server.py`, `backend/api/schemas.py`, `backend/api/main.py`, `backend/agents/graphs/supervisor.py`, `backend/agents/state.py`, `backend/tests/unit_tests/{test_api_gap_reports,test_job_posting_schema}.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 116개 통과, 3개 실패(`redact_sensitive_text` 관련 기존 실패, 이번 변경과 무관). MCP stdio로 실제 호출해 변경 전후 응답 모양(`[{'type':'text',...}]`)과 15개 키가 같아 `get_first_mcp_result`가 수정 없이 동작함을 확인했고, `outputSchema`의 필수 `id/company/title`과 필드 설명을 확인했다. 실제 DB에서 API 쿼리 경로와 MCP tool 경로의 `selected_posting`이 키·값 모두 같음을 읽기 전용으로 확인했다.
+- **범위**: `semantic_search_jobs`(검색 결과 + `similarity`/`sim_*`), `/jobs`·`/favorites` 목록 응답, `AppState.selected_posting`/`candidates`의 dict 타입은 아직 모델로 바꾸지 않았다. `JobPosting.is_active`는 DB가 `NOT NULL DEFAULT true`인데 모델은 `Optional`이다.
+
+### #69 `parse_job_posting_to_state_dict`를 `fetch_job_posting_by_id`로 대체
+- **무엇을**: `parse_job_posting_to_state_dict`(검증+JSON dump를 한 함수가 수행)를 삭제하고, supervisor에 `fetch_job_posting_by_id(tools, posting_id) -> JobPosting | None`을 추가했다. 검증은 MCP 결과를 받는 경계에서 하고, JSON dict 변환(`model_dump(mode="json")`)은 상태에 넣는 한 곳에서만 한다. `posting_number` 분기와 `posting_id` 분기에 중복돼 있던 `get_job_posting` 호출은 "조회할 id를 정하는 단계"와 "조회 단계"로 나눠 한 번만 호출한다.
+- **왜**: 한 함수가 서로 다른 경계의 두 변환(dict→모델, 모델→dict)을 함께 맡아 AGENTS.md의 단일 책임 규칙에 어긋났고, 중간에 모델이 잠깐 생겼다 사라지는 것처럼 보였다. 성능 이득은 없다(왕복 변환 약 4.4µs vs MCP 호출 수백 ms).
+- **변경**: `backend/agents/graphs/supervisor.py`, `common/schemas.py`, `backend/tests/unit_tests/test_job_posting_schema.py`, `CHANGELOG.md`.
+- **검증**: `uv run pytest backend/tests/unit_tests -q` — 117개 통과, 3개 실패(`redact_sensitive_text` 관련 기존 실패, 이번 변경과 무관). `posting_number`/`posting_id` 선택 시나리오(`test_supervisor.py`)가 그대로 통과하고, 정상 결과·빈 결과(None)·스키마 불일치(`ValidationError`) 3경우를 단위 테스트로 확인했다. 실제 MCP 서버에서 id 571은 `JobPosting`(상태 키 15개), id -1은 `None`임을 읽기 전용으로 확인했다.
+- **동작 변화**: ① `posting_id` 분기의 `except Exception`을 제거했다. 어댑터는 없는 공고에도 예외 대신 `Error executing tool ...` 텍스트를 돌려주고 `parse_mcp_tool_result`가 이를 건너뛰어 빈 결과가 되므로 "없는 공고"는 예외 없이 `None`으로 처리돼 해당 `try`는 사실상 동작하지 않았다. 이제 연결 실패 같은 실제 장애와 스키마 불일치는 삼키지 않고 턴 오류로 드러난다. ② `posting_number` 분기도 같은 경로를 쓰므로 후보가 그 사이 삭제돼 조회되지 않으면 예외 없이 `None`으로 처리돼 기존 선택 공고를 유지하거나 되묻는다.
+- **범위**: `get_first_mcp_result`·`parse_mcp_tool_result`는 바꾸지 않았다. tool 오류 텍스트와 "없는 공고"를 구분하지 못하는 점은 그대로이며, 필요하면 `ToolMessage.artifact["structured_content"]` 경로 사용을 검토한다.
+
 ## 미해결 / 다음 후보
 - Gemma가 거의 항상 타임아웃 → 서킷 브레이커로 낭비는 줄였지만(#15), 기본 모델 교체 검토는 여전히 필요
 - id 48 `RX 기술 리더(팀장)`의 AI 관련성 점검 및 1차 필터의 재현율 점검(현대오토에버 목록에서 빠진 AI 공고가 없는지)

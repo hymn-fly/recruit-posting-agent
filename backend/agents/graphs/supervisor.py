@@ -16,6 +16,7 @@ from agents.llm import LLM
 from agents.mcp_client import get_first_mcp_result
 from agents.progress import STATUS_DONE, STATUS_START, emit_progress
 from agents.state import AppState, Route
+from common.schemas import JobPosting
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,16 @@ AGENT_TOOLS = {
     "profile_gap": ("get_profile_summary", "search_profile"),
 }
 
+
+
+async def fetch_job_posting_by_id(tools: dict, posting_id: int) -> JobPosting | None:
+    """get_job_posting tool로 공고를 조회해 JobPosting으로 검증해 돌려준다.
+
+    없는 공고·tool 오류처럼 결과가 비어 있으면 None. 결과가 스키마와 다르면 ValidationError를 그대로 올린다.
+    """
+    raw_posting = get_first_mcp_result(await tools["get_job_posting"].ainvoke({"id": posting_id}))
+
+    return JobPosting.model_validate(raw_posting) if raw_posting else None
 
 
 def _last_user(state: AppState) -> str:
@@ -124,17 +135,19 @@ def make_graph(tools: dict, checkpointer=None):
 
         out: AppState = {"route": route}
         if any(agent in NEEDS_POSTING for agent in list_agents_to_run(route)):
-            posting = None
-            cands_list = state.get("candidates") or []
-            if route.posting_number and 1 <= route.posting_number <= len(cands_list):
-                posting = get_first_mcp_result(await tools["get_job_posting"].ainvoke({"id": cands_list[route.posting_number - 1]["id"]}))
-            elif route.posting_id:
-                try:
-                    posting = get_first_mcp_result(await tools["get_job_posting"].ainvoke({"id": route.posting_id}))
-                except Exception:
-                    posting = None
-            if isinstance(posting, dict) and posting:
-                out["selected_posting"] = posting
+            # 후보 번호가 유효하면 그 후보의 id를, 아니면 route.posting_id를 조회 대상으로 정한다
+            candidate_list = state.get("candidates") or []
+            if route.posting_number and 1 <= route.posting_number <= len(candidate_list):
+                requested_posting_id = candidate_list[route.posting_number - 1]["id"]
+            else:
+                requested_posting_id = route.posting_id
+
+            # 공고를 조회한다 (못 찾으면 None)
+            posting = await fetch_job_posting_by_id(tools, requested_posting_id) if requested_posting_id else None
+
+            # 찾은 공고를 선택하고, 선택된 공고가 아예 없으면 사용자에게 되묻는다
+            if posting is not None:
+                out["selected_posting"] = posting.model_dump(mode="json")
             elif not sel:
                 out["route"] = Route(next="FINISH", reason="분석할 공고가 선택되지 않음",
                                      reply="어떤 공고를 분석할까요? 먼저 공고를 검색하거나 번호/id로 알려주세요.")

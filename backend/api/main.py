@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 
+from api.schemas import PostingWithSavedReports
 from common.observability import configure_logging, request_id
 from agents.graphs.supervisor import make_graph, input_to_agent_state
 from agents.mcp_client import open_tools
@@ -205,31 +206,62 @@ async def save_gap_report_of_session(sid: str) -> None:
         posting_id, report)
 
 
+# $2/$3이 false면 해당 서브쿼리는 테이블을 읽지 않는다(불필요한 보고서 본문을 가져오지 않기 위함)
+SELECT_POSTING_WITH_SAVED_REPORTS_SQL = """
+SELECT j.id, j.title, j.url, j.location, j.employment_type, j.min_years, j.category,
+       j.responsibilities, j.required_qualifications, j.preferred_qualifications,
+       j.posted_at, j.deadline, j.is_active,
+       c.name AS company, c.industry,
+       (SELECT r.report_md FROM company_research r
+         WHERE $2 AND r.posting_id = j.id ORDER BY r.created_at DESC LIMIT 1) AS cached_research_report,
+       (SELECT g.report_md FROM posting_gap_reports g
+         WHERE $3 AND g.posting_id = j.id) AS saved_gap_report
+FROM job_postings j
+JOIN companies c ON c.id = j.company_id
+WHERE j.id = $1
+"""
+
+
+async def get_posting_with_saved_reports(
+    posting_id: int, need_research_report: bool, need_gap_report: bool,
+) -> PostingWithSavedReports | None:
+    """공고 1건과 저장된 기업 분석·역량 분석을 한 번의 쿼리로 조회한다. 공고가 없으면 None."""
+    connection_pool = await db.pool()
+    row = await connection_pool.fetchrow(SELECT_POSTING_WITH_SAVED_REPORTS_SQL,
+                                         posting_id, need_research_report, need_gap_report)
+
+    return PostingWithSavedReports.model_validate(dict(row)) if row is not None else None
+
+
 @app.put("/sessions/{sid}/select/{posting_id}")
 async def select_posting(sid: str, posting_id: int):
     cfg = config(sid)
     async with sessions[sid]:
-        pool = await db.pool()
-        row = await pool.fetchrow("SELECT j.id,j.title,j.url,j.location,j.deadline,j.min_years,j.responsibilities,j.required_qualifications,j.preferred_qualifications,c.name AS company,c.industry FROM job_postings j JOIN companies c ON c.id=j.company_id WHERE j.id=$1", posting_id)
-        if not row:
-            raise HTTPException(404, "공고를 찾지 못했습니다.")
-        
+        # 세션 상태(메모리)를 먼저 읽어 DB에서 추가로 가져올 보고서가 있는지 정한다
         state = (await app.state.graph.aget_state(cfg)).values
-        old = state.get("selected_posting") or {}
-        update = {"selected_posting": jsonable_encoder(dict(row))}
-        if old.get("id") != posting_id:
-            update.update(research_report="", research_posting_id=None)
-            cached = await pool.fetchval("SELECT report_md FROM company_research WHERE posting_id=$1 ORDER BY created_at DESC LIMIT 1", posting_id)
-            if cached:
-                update.update(research_report=cached, research_posting_id=posting_id)
-                
-        # 세션 메모리에 없는 공고의 역량 분석은 DB에 저장된 것을 불러온다
+        previous_posting = state.get("selected_posting") or {}
         gap_reports = dict(state.get("gap_reports") or {})
-        in_memory = state.get("gap_posting_id") == posting_id or str(posting_id) in gap_reports
-        if not in_memory:
-            saved_gap_report = await pool.fetchval("SELECT report_md FROM posting_gap_reports WHERE posting_id=$1", posting_id)
-            if saved_gap_report:
-                update["gap_reports"] = {**gap_reports, str(posting_id): saved_gap_report}
+
+        posting_changed = previous_posting.get("id") != posting_id
+        gap_report_in_memory = state.get("gap_posting_id") == posting_id or str(posting_id) in gap_reports
+
+        # 공고와 저장된 보고서를 한 번에 조회한다
+        posting = await get_posting_with_saved_reports(posting_id, posting_changed, not gap_report_in_memory)
+        if posting is None:
+            raise HTTPException(404, "공고를 찾지 못했습니다.")
+
+        # 선택한 공고가 바뀌면 기업 분석을 비우고, 저장된 것이 있으면 불러온다
+        update = {"selected_posting": posting.model_dump(
+            mode="json", exclude={"cached_research_report", "saved_gap_report"})}
+        if posting_changed:
+            update.update(research_report="", research_posting_id=None)
+            if posting.cached_research_report:
+                update.update(research_report=posting.cached_research_report, research_posting_id=posting_id)
+
+        # 세션 메모리에 없는 공고의 역량 분석은 DB에 저장된 것을 불러온다
+        if posting.saved_gap_report:
+            update["gap_reports"] = {**gap_reports, str(posting_id): posting.saved_gap_report}
+
         await app.state.graph.aupdate_state(cfg, update)
         return await snapshot(sid)
 
