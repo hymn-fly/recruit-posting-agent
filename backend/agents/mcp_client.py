@@ -11,11 +11,11 @@ ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트 (backend/agents/ 
 
 def make_client() -> MultiServerMCPClient:
     return MultiServerMCPClient({
-        "job-db": {
-            "command": sys.executable,
-            "args": [str(ROOT / "mcp_server" / "collect_server.py")],
-            "transport": "stdio",
-        },
+        # "job-db": {
+        #     "command": sys.executable,
+        #     "args": [str(ROOT / "mcp_server" / "collect_server.py")],
+        #     "transport": "stdio",
+        # },
         "job-query": {
             "command": sys.executable,
             "args": [str(ROOT / "mcp_server" / "query_server.py")],
@@ -27,12 +27,6 @@ def make_client() -> MultiServerMCPClient:
             "transport": "stdio",
         },
     })
-
-
-async def get_tools() -> dict:
-    """호출마다 MCP 서버 프로세스를 새로 띄운다 (단발성 실행용)."""
-    client = make_client()
-    return {t.name: t for t in await client.get_tools()}
 
 
 @asynccontextmanager
