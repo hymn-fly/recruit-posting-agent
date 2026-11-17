@@ -608,6 +608,15 @@
 - **검증**: `uv run pytest backend/tests/unit_tests -q` — 110개 통과, 3개 실패(`api/main.py`에서 `redact_sensitive_text`가 빠져 생긴 기존 실패, 이번 변경과 무관). 저장 직전 본문 정리, 비 http URL 저장 거부, 회사·제목 없는 검색 결과 제외, 지시문 줄이 제거된 웹 결과, 잘못된 캐시 출처의 재검색, 프롬프트 XML 구조를 확인했다.
 - **범위**: 이미 DB에 저장된 공고·캐시는 정리되지 않는다. 길이 한도(12,000자 등)와 `source_snapshot` 정리는 적용하지 않았다. 프로필 요약은 정리된 원문으로 만든 LLM 출력을 그대로 쓴다.
 
+## 2026-11-17
+
+### #65 LangSmith tracing 설정 추가
+- **무엇을**: `langsmith`를 직접 의존성으로 추가하고 `.env.example`에 `LANGSMITH_TRACING/API_KEY/PROJECT/ENDPOINT`와 입출력 숨김 옵션(`LANGSMITH_HIDE_INPUTS/OUTPUTS`, 주석 처리)을 넣었다. 코드는 바꾸지 않았다.
+- **왜**: supervisor 아래 서브그래프·LLM·tool 호출을 한 trace 트리로 보고 디버깅하기 위해. LangChain/LangGraph는 환경변수만으로 자동 tracing하므로 `ainvoke`/`astream`에 callback을 넘길 필요가 없다.
+- **변경**: `pyproject.toml`, `uv.lock`, `.env.example`, `CHANGELOG.md`.
+- **검증**: `LANGSMITH_TRACING=true`/`false`로 `langsmith.utils.tracing_is_enabled()`가 각각 True/False, 프로젝트명 `make-agents`로 인식되는 것을 확인했다. 실제 trace 전송은 API 키가 필요해 아직 확인하지 않았다.
+- **범위**: MCP 서버는 stdio 자식 프로세스라 서버 내부 동작(DB 쿼리 등)은 trace에 잡히지 않고, 메인 프로세스의 tool 호출 입출력만 잡힌다. 이력서·경력기술서 원문이 LangSmith로 전송될 수 있다.
+
 ## 미해결 / 다음 후보
 - Gemma가 거의 항상 타임아웃 → 서킷 브레이커로 낭비는 줄였지만(#15), 기본 모델 교체 검토는 여전히 필요
 - id 48 `RX 기술 리더(팀장)`의 AI 관련성 점검 및 1차 필터의 재현율 점검(현대오토에버 목록에서 빠진 AI 공고가 없는지)
