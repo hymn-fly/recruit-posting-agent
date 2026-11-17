@@ -6,11 +6,15 @@ import json
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+import logging
 
 from mcp.server.fastmcp import FastMCP
 
-# 저장소 루트(mcp_server, common) + backend(agents 가드레일). 자식 프로세스는 PYTHONPATH를 물려받지 않는다.
 sys.path[:0] = [str(Path(__file__).resolve().parent.parent), str(Path(__file__).resolve().parent.parent / "backend")]
+
+from common.observability import configure_logging  # noqa: E402
+log = logging.getLogger(__name__ if __name__ != "__main__" else "mcp_server.profile_server")
+# 저장소 루트(mcp_server, common) + backend(agents 가드레일). 자식 프로세스는 PYTHONPATH를 물려받지 않는다.
 
 from mcp_server import db  # noqa: E402  (pool, .env 로딩 재사용)
 from mcp_server.embeddings import embed_query, to_pg  # noqa: E402
@@ -23,6 +27,7 @@ async def lifespan(_server):
 
 
 mcp = FastMCP("profile-db", lifespan=lifespan)
+
 
 
 @mcp.tool()
@@ -59,4 +64,6 @@ async def list_profile_documents() -> list[dict]:
 
 
 if __name__ == "__main__":
+    configure_logging("profile-server.log")
+    log.info("event=profile_server_ready")
     mcp.run()
